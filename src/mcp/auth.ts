@@ -12,6 +12,8 @@ const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
 const SLACK_CLIENT_ID = process.env.SLACK_CLIENT_ID;
 const SLACK_CLIENT_SECRET = process.env.SLACK_CLIENT_SECRET;
+const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID;
+const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
 
 const SCOPES = [
@@ -99,16 +101,29 @@ export async function getGoogleProfile(accessToken: string): Promise<{
 
 /**
  * Handle OAuth callback - create/update user and set session
+ * If existingUserId is provided, adds the account to that user instead of creating a new one
  */
 export async function handleOAuthCallback(
   code: string,
-  c: Context
+  c: Context,
+  existingUserId?: string
 ): Promise<User> {
   const tokens = await exchangeCodeForTokens(code);
   const profile = await getGoogleProfile(tokens.accessToken);
 
-  // Create or update user
-  const user = await findOrCreateUser(profile);
+  let user: User;
+
+  if (existingUserId) {
+    // Adding account to existing user
+    const existing = await getUserById(existingUserId);
+    if (!existing) {
+      throw new Error('User not found');
+    }
+    user = existing;
+  } else {
+    // Create or update user (first time login)
+    user = await findOrCreateUser(profile);
+  }
 
   // Save Google OAuth tokens
   await saveOAuthToken(user.id, {
@@ -283,4 +298,169 @@ export async function handleSlackCallback(
   });
 
   return { teamName: tokens.teamName };
+}
+
+// ============================================================================
+// Discord OAuth
+// ============================================================================
+
+const DISCORD_SCOPES = [
+  'identify',
+  'guilds',
+  'messages.read',
+  'dm_channels.messages.read',
+  'dm_channels.messages.write',
+].join(' ');
+
+/**
+ * Generate Discord OAuth URL
+ */
+export function getDiscordAuthUrl(state?: string): string {
+  if (!DISCORD_CLIENT_ID) {
+    throw new Error('DISCORD_CLIENT_ID not configured');
+  }
+
+  const params = new URLSearchParams({
+    client_id: DISCORD_CLIENT_ID,
+    redirect_uri: `${BASE_URL}/auth/discord/callback`,
+    response_type: 'code',
+    scope: DISCORD_SCOPES,
+    ...(state && { state }),
+  });
+
+  return `https://discord.com/api/oauth2/authorize?${params}`;
+}
+
+/**
+ * Exchange Discord authorization code for tokens
+ */
+export async function exchangeDiscordCode(code: string): Promise<{
+  accessToken: string;
+  refreshToken: string;
+  tokenType: string;
+  expiresIn: number;
+  scope: string;
+  guild?: { id: string; name: string };
+}> {
+  if (!DISCORD_CLIENT_ID || !DISCORD_CLIENT_SECRET) {
+    throw new Error('Discord OAuth not configured');
+  }
+
+  const response = await fetch('https://discord.com/api/oauth2/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: DISCORD_CLIENT_ID,
+      client_secret: DISCORD_CLIENT_SECRET,
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: `${BASE_URL}/auth/discord/callback`,
+    }),
+  });
+
+  const data = await response.json();
+
+  if (data.error) {
+    throw new Error(`Discord OAuth error: ${data.error_description || data.error}`);
+  }
+
+  return {
+    accessToken: data.access_token,
+    refreshToken: data.refresh_token,
+    tokenType: data.token_type,
+    expiresIn: data.expires_in,
+    scope: data.scope,
+    guild: data.guild, // Present if bot was added to a guild
+  };
+}
+
+/**
+ * Get Discord user info
+ */
+export async function getDiscordUser(accessToken: string): Promise<{
+  id: string;
+  username: string;
+  discriminator: string;
+  avatar?: string;
+  email?: string;
+}> {
+  const response = await fetch('https://discord.com/api/users/@me', {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  const data = await response.json();
+
+  if (data.code) {
+    throw new Error(`Discord API error: ${data.message}`);
+  }
+
+  return {
+    id: data.id,
+    username: data.username,
+    discriminator: data.discriminator,
+    avatar: data.avatar,
+    email: data.email,
+  };
+}
+
+/**
+ * Get Discord guilds for user
+ */
+export async function getDiscordGuilds(accessToken: string): Promise<Array<{
+  id: string;
+  name: string;
+  icon?: string;
+  owner: boolean;
+}>> {
+  const response = await fetch('https://discord.com/api/users/@me/guilds', {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  const data = await response.json();
+
+  if (data.code) {
+    throw new Error(`Discord API error: ${data.message}`);
+  }
+
+  return data.map((g: any) => ({
+    id: g.id,
+    name: g.name,
+    icon: g.icon,
+    owner: g.owner,
+  }));
+}
+
+/**
+ * Handle Discord OAuth callback
+ */
+export async function handleDiscordCallback(
+  code: string,
+  odmoUserId: string
+): Promise<{ username: string; guildName?: string }> {
+  const tokens = await exchangeDiscordCode(code);
+  const user = await getDiscordUser(tokens.accessToken);
+
+  // Account name is Discord username
+  const accountName = user.username;
+
+  // Save Discord OAuth tokens
+  await saveOAuthToken(odmoUserId, {
+    provider: 'discord',
+    accountName,
+    accessToken: tokens.accessToken,
+    refreshToken: tokens.refreshToken,
+    tokenData: {
+      odmoUserId: user.id,
+      username: user.username,
+      discriminator: user.discriminator,
+      expiresIn: tokens.expiresIn,
+      scope: tokens.scope,
+      guild: tokens.guild,
+    },
+  });
+
+  return {
+    username: user.username,
+    guildName: tokens.guild?.name,
+  };
 }
