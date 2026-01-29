@@ -14,6 +14,8 @@ const SLACK_CLIENT_ID = process.env.SLACK_CLIENT_ID;
 const SLACK_CLIENT_SECRET = process.env.SLACK_CLIENT_SECRET;
 const LINEAR_CLIENT_ID = process.env.LINEAR_CLIENT_ID;
 const LINEAR_CLIENT_SECRET = process.env.LINEAR_CLIENT_SECRET;
+const NOTION_CLIENT_ID = process.env.NOTION_CLIENT_ID;
+const NOTION_CLIENT_SECRET = process.env.NOTION_CLIENT_SECRET;
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
 
 const SCOPES = [
@@ -438,4 +440,96 @@ export async function handleLinearCallback(
   });
 
   return { organizationName: viewer.organizationName };
+}
+
+// ============================================================================
+// Notion OAuth
+// ============================================================================
+
+/**
+ * Generate Notion OAuth URL
+ */
+export function getNotionAuthUrl(state?: string): string {
+  if (!NOTION_CLIENT_ID) {
+    throw new Error('NOTION_CLIENT_ID not configured');
+  }
+
+  const params = new URLSearchParams({
+    client_id: NOTION_CLIENT_ID,
+    redirect_uri: `${BASE_URL}/auth/notion/callback`,
+    response_type: 'code',
+    owner: 'user',
+    ...(state && { state }),
+  });
+
+  return `https://api.notion.com/v1/oauth/authorize?${params}`;
+}
+
+/**
+ * Exchange Notion authorization code for tokens
+ */
+export async function exchangeNotionCode(code: string): Promise<{
+  accessToken: string;
+  workspaceId: string;
+  workspaceName: string;
+  workspaceIcon?: string;
+  botId: string;
+}> {
+  if (!NOTION_CLIENT_ID || !NOTION_CLIENT_SECRET) {
+    throw new Error('Notion OAuth not configured');
+  }
+
+  const credentials = Buffer.from(`${NOTION_CLIENT_ID}:${NOTION_CLIENT_SECRET}`).toString('base64');
+
+  const response = await fetch('https://api.notion.com/v1/oauth/token', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Basic ${credentials}`,
+    },
+    body: JSON.stringify({
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: `${BASE_URL}/auth/notion/callback`,
+    }),
+  });
+
+  const data = await response.json();
+
+  if (data.error) {
+    throw new Error(`Notion OAuth error: ${data.error}`);
+  }
+
+  return {
+    accessToken: data.access_token,
+    workspaceId: data.workspace_id,
+    workspaceName: data.workspace_name || 'Notion Workspace',
+    workspaceIcon: data.workspace_icon,
+    botId: data.bot_id,
+  };
+}
+
+/**
+ * Handle Notion OAuth callback
+ */
+export async function handleNotionCallback(
+  code: string,
+  userId: string
+): Promise<{ workspaceName: string }> {
+  const tokens = await exchangeNotionCode(code);
+
+  // Save Notion OAuth tokens
+  await saveOAuthToken(userId, {
+    provider: 'notion',
+    accountName: tokens.workspaceName,
+    accessToken: tokens.accessToken,
+    tokenData: {
+      workspaceId: tokens.workspaceId,
+      workspaceName: tokens.workspaceName,
+      workspaceIcon: tokens.workspaceIcon,
+      botId: tokens.botId,
+    },
+  });
+
+  return { workspaceName: tokens.workspaceName };
 }

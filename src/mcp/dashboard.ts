@@ -68,7 +68,8 @@ export async function getServicesStatus(userId: string): Promise<ServiceConfig[]
       name: 'Notion',
       icon: '📝',
       description: 'Notes and documentation',
-      authType: 'apikey',
+      authType: 'oauth',
+      authUrl: '/auth/notion',
       connected: notionTokens.length > 0,
       accounts: notionTokens.map(t => ({ name: t.accountName })),
     },
@@ -348,21 +349,7 @@ export async function renderDashboard(user: User): Promise<string> {
  */
 export function renderApiKeySetup(service: string): string {
   const configs: Record<string, { name: string; instructions: string; placeholder: string }> = {
-    linear: {
-      name: 'Linear',
-      instructions: 'Go to Linear Settings → Account → Security & Access → Personal API keys → Create key',
-      placeholder: 'lin_api_xxxxxxxxxxxx',
-    },
-    notion: {
-      name: 'Notion',
-      instructions: 'Go to notion.so/my-integrations → Create new integration → Copy the Internal Integration Token',
-      placeholder: 'ntn_xxxxxxxxxxxx or secret_xxxxxxxxxxxx',
-    },
-    discord: {
-      name: 'Discord',
-      instructions: 'Go to discord.com/developers/applications → Create application → Bot → Copy token',
-      placeholder: 'MTxxxxxx.xxxxxx.xxxxxx',
-    },
+    // Currently all services use OAuth, but keeping this structure for future API key services
   };
 
   const config = configs[service];
@@ -474,7 +461,6 @@ export async function renderServiceManage(userId: string, service: string): Prom
     slack: 'Slack',
     linear: 'Linear',
     notion: 'Notion',
-    discord: 'Discord',
   };
 
   const accountsList = tokens.map(t => `
@@ -531,7 +517,7 @@ export async function renderServiceManage(userId: string, service: string): Prom
     ${accountsList || '<p style="color: #666;">No accounts connected.</p>'}
 
     <div class="actions">
-      ${service === 'google' || service === 'slack'
+      ${['google', 'slack', 'linear', 'notion'].includes(service)
         ? `<a href="/auth/${service}" class="btn btn-primary">Add Another Account</a>`
         : `<a href="/services/${service}/setup" class="btn btn-primary">Add Another Account</a>`
       }

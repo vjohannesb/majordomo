@@ -42,6 +42,8 @@ import {
   handleSlackCallback,
   getLinearAuthUrl,
   handleLinearCallback,
+  getNotionAuthUrl,
+  handleNotionCallback,
 } from './auth.js';
 import {
   listEmails,
@@ -719,6 +721,67 @@ app.get('/auth/linear/callback', async (c) => {
       <html><body>
         <h1>Linear Connected!</h1>
         <p>Connected to workspace: ${organizationName}</p>
+        <p><a href="/dashboard">Back to Dashboard</a></p>
+      </body></html>
+    `);
+  } catch (error) {
+    return c.json({ error: String(error) }, 500);
+  }
+});
+
+// Notion OAuth
+app.get('/auth/notion', async (c) => {
+  const user = await getCurrentUser(c);
+  if (!user) {
+    return c.redirect('/auth/google');
+  }
+
+  try {
+    const url = getNotionAuthUrl(user.id);
+    return c.redirect(url);
+  } catch (error) {
+    return c.html(`
+      <html><body>
+        <h1>Notion OAuth Not Configured</h1>
+        <p>Set NOTION_CLIENT_ID and NOTION_CLIENT_SECRET environment variables.</p>
+        <p><a href="/dashboard">Back to Dashboard</a></p>
+      </body></html>
+    `);
+  }
+});
+
+app.get('/auth/notion/callback', async (c) => {
+  const code = c.req.query('code');
+  const state = c.req.query('state');
+  const error = c.req.query('error');
+
+  if (error) {
+    return c.html(`
+      <html><body>
+        <h1>Notion OAuth Error</h1>
+        <p>${error}</p>
+        <p><a href="/dashboard">Back to Dashboard</a></p>
+      </body></html>
+    `);
+  }
+
+  if (!code) {
+    return c.json({ error: 'No code provided' }, 400);
+  }
+
+  const user = await getCurrentUser(c);
+  const userId = user?.id || state;
+
+  if (!userId) {
+    return c.json({ error: 'No user session' }, 401);
+  }
+
+  try {
+    const { workspaceName } = await handleNotionCallback(code, userId);
+    return c.html(`
+      <html><body>
+        <h1>Notion Connected!</h1>
+        <p>Connected to workspace: ${workspaceName}</p>
         <p><a href="/dashboard">Back to Dashboard</a></p>
       </body></html>
     `);
