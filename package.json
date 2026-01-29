@@ -8,7 +8,7 @@
     "majordomo": "./bin/majordomo.js"
   },
   "scripts": {
-    "setup": "tsx scripts/setup.ts",
+    "setup": "tsx src/setup/index.ts",
     "start": "tsx src/cli.ts",
     "debug": "tsx src/cli.ts --debug",
     "dev": "tsx watch src/cli.ts",
