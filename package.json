@@ -1,0 +1,35 @@
+{
+  "name": "majordomo",
+  "version": "0.1.0",
+  "description": "Personal AI life management system",
+  "type": "module",
+  "main": "dist/cli.js",
+  "bin": {
+    "majordomo": "./bin/majordomo.js"
+  },
+  "scripts": {
+    "setup": "tsx scripts/setup.ts",
+    "start": "tsx src/cli.ts",
+    "debug": "tsx src/cli.ts --debug",
+    "dev": "tsx watch src/cli.ts",
+    "build": "tsc"
+  },
+  "keywords": [
+    "ai",
+    "assistant",
+    "automation",
+    "claude",
+    "slack"
+  ],
+  "author": "",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^25.1.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  },
+  "dependencies": {
+    "@slack/web-api": "^7.13.0",
+    "googleapis": "^170.1.0"
+  }
+}
