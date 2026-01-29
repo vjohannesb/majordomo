@@ -492,8 +492,10 @@ async function addLinearAccount(): Promise<LinearAccount | null> {
   if (isCancel(name)) return null;
 
   p.note(
-    `1. Go to: https://linear.app/settings/api
-2. Create key -> Copy the API key (lin_api_...)`,
+    `1. Go to Linear → Settings (gear icon) → Account → Security & Access
+2. Under "Personal API keys", click "New API key"
+3. Name it (e.g., "Majordomo") and click Create
+4. Copy the key (starts with lin_api_...)`,
     'Get Linear API Key'
   );
 
