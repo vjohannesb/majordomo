@@ -6,7 +6,6 @@
  */
 
 import { Hono } from 'hono';
-import { serve } from '@hono/node-server';
 import { cors } from 'hono/cors';
 import { streamSSE } from 'hono/streaming';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -530,9 +529,12 @@ async function main() {
     console.warn('Running without database - set DATABASE_URL to enable persistence');
   }
 
-  // Start HTTP server
+  // Start HTTP server using Bun
   console.log(`Starting Majordomo MCP server on port ${PORT}...`);
-  serve({ fetch: app.fetch, port: PORT });
+  Bun.serve({
+    fetch: app.fetch,
+    port: PORT,
+  });
   console.log(`Server running at http://localhost:${PORT}`);
 }
 

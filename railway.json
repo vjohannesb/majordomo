@@ -1,10 +1,10 @@
 {
-  "$schema": "https://railway.app/railway.schema.json",
+  "$schema": "https://railway.com/railway.schema.json",
   "build": {
-    "builder": "NIXPACKS"
+    "builder": "RAILPACK"
   },
   "deploy": {
-    "startCommand": "npm run mcp",
+    "startCommand": "bun run src/mcp/server.ts",
     "healthcheckPath": "/health",
     "restartPolicyType": "ON_FAILURE"
   }

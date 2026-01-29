@@ -8,14 +8,14 @@
     "majordomo": "./bin/majordomo.js"
   },
   "scripts": {
-    "setup": "tsx src/setup/index.ts",
-    "start": "tsx src/cli.ts",
-    "debug": "tsx src/cli.ts --debug",
-    "dev": "tsx watch src/cli.ts",
-    "build": "tsc",
-    "mcp": "tsx src/mcp/server.ts",
-    "mcp:dev": "tsx watch src/mcp/server.ts",
-    "mcp:stdio": "tsx src/mcp/server.ts --stdio"
+    "setup": "bun run src/setup/index.ts",
+    "start": "bun run src/cli.ts",
+    "debug": "bun run src/cli.ts --debug",
+    "dev": "bun --watch src/cli.ts",
+    "build": "bun build src/cli.ts --outdir=dist --target=node",
+    "mcp": "bun run src/mcp/server.ts",
+    "mcp:dev": "bun --watch src/mcp/server.ts",
+    "mcp:stdio": "bun run src/mcp/server.ts --stdio"
   },
   "keywords": [
     "ai",
@@ -28,6 +28,7 @@
   "license": "MIT",
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.13",
+    "@types/bun": "^1.1.0",
     "@types/node": "^25.1.0",
     "tsx": "^4.21.0",
     "typescript": "^5.9.3"
@@ -35,7 +36,6 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",
     "@clack/prompts": "^1.0.0",
-    "@hono/node-server": "^1.19.9",
     "@linear/sdk": "^72.0.0",
     "@modelcontextprotocol/sdk": "^1.25.3",
     "@notionhq/client": "^5.8.0",
