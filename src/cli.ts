@@ -13,6 +13,10 @@
  *   majordomo --serve             - Start HTTP gateway server
  */
 
+// Load environment variables from .env
+import { config } from 'dotenv';
+config();
+
 import { createInterface } from 'node:readline';
 import { AgentRunner, SessionManager } from './agent/index.js';
 
