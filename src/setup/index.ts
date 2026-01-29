@@ -26,7 +26,10 @@ import type {
   LinearAccount,
   NotionAccount,
   JiraAccount,
+  ProviderSettings,
+  ProviderType,
 } from '../config.js';
+import { detectAvailableProviders, ClaudeCodeProvider, OllamaProvider } from '../providers/index.js';
 
 // OAuth credentials - loaded from environment or config
 // Users can set these in .env or provide their own
@@ -689,6 +692,248 @@ async function manageAccounts<T extends { name: string; isDefault?: boolean }>(
 }
 
 // ============================================================================
+// Provider Configuration
+// ============================================================================
+
+async function configureProvider(currentProvider?: ProviderSettings): Promise<ProviderSettings | undefined> {
+  // Detect what's available
+  const s = p.spinner();
+  s.start('Detecting available providers...');
+  const available = await detectAvailableProviders();
+  s.stop('Detection complete');
+
+  // Build options
+  const providerOptions: Array<{ value: ProviderType; label: string; hint: string }> = [
+    {
+      value: 'anthropic',
+      label: 'Anthropic (Claude)',
+      hint: process.env.ANTHROPIC_API_KEY ? color.green('API key found in env') : 'Requires API key',
+    },
+    {
+      value: 'openai',
+      label: 'OpenAI (GPT)',
+      hint: process.env.OPENAI_API_KEY ? color.green('API key found in env') : 'Requires API key',
+    },
+    {
+      value: 'ollama',
+      label: 'Ollama (Local)',
+      hint: available.includes('ollama') ? color.green('Running locally') : color.yellow('Not detected - install from ollama.ai'),
+    },
+    {
+      value: 'claude-code',
+      label: 'Claude Code CLI',
+      hint: available.includes('claude-code') ? color.green('Installed') : color.yellow('Not detected - install with npm i -g @anthropic/claude-code'),
+    },
+  ];
+
+  const provider = await p.select({
+    message: 'Select AI provider',
+    options: providerOptions,
+    initialValue: currentProvider?.provider,
+  });
+
+  if (isCancel(provider)) return currentProvider;
+
+  const selectedProvider = provider as ProviderType;
+  let settings: ProviderSettings = {
+    provider: selectedProvider,
+    authMode: 'api_key',
+  };
+
+  switch (selectedProvider) {
+    case 'anthropic': {
+      const hasEnvKey = !!process.env.ANTHROPIC_API_KEY;
+
+      if (hasEnvKey) {
+        const useEnv = await p.confirm({
+          message: `Use API key from environment (ANTHROPIC_API_KEY)?`,
+          initialValue: true,
+        });
+
+        if (isCancel(useEnv)) return currentProvider;
+
+        if (useEnv) {
+          settings.apiKey = process.env.ANTHROPIC_API_KEY;
+        }
+      }
+
+      if (!settings.apiKey) {
+        p.note(
+          'Get your API key from: https://console.anthropic.com/',
+          'Anthropic API Key'
+        );
+
+        const apiKey = await p.text({
+          message: 'API Key (sk-ant-...)',
+          validate: (v) => {
+            if (!v) return 'Required';
+            if (!v.startsWith('sk-ant-')) return 'Should start with sk-ant-';
+            return undefined;
+          },
+        });
+
+        if (isCancel(apiKey)) return currentProvider;
+        settings.apiKey = apiKey as string;
+      }
+
+      // Model selection
+      const model = await p.select({
+        message: 'Select model',
+        options: [
+          { value: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4', hint: 'Fast and capable (recommended)' },
+          { value: 'claude-opus-4-20250514', label: 'Claude Opus 4', hint: 'Most capable, slower' },
+          { value: 'claude-haiku-3-20240307', label: 'Claude Haiku 3', hint: 'Fastest, cheapest' },
+        ],
+      });
+
+      if (!isCancel(model)) {
+        settings.model = model as string;
+      }
+      break;
+    }
+
+    case 'openai': {
+      const hasEnvKey = !!process.env.OPENAI_API_KEY;
+
+      if (hasEnvKey) {
+        const useEnv = await p.confirm({
+          message: `Use API key from environment (OPENAI_API_KEY)?`,
+          initialValue: true,
+        });
+
+        if (isCancel(useEnv)) return currentProvider;
+
+        if (useEnv) {
+          settings.apiKey = process.env.OPENAI_API_KEY;
+        }
+      }
+
+      if (!settings.apiKey) {
+        p.note(
+          'Get your API key from: https://platform.openai.com/api-keys',
+          'OpenAI API Key'
+        );
+
+        const apiKey = await p.text({
+          message: 'API Key (sk-...)',
+          validate: (v) => {
+            if (!v) return 'Required';
+            if (!v.startsWith('sk-')) return 'Should start with sk-';
+            return undefined;
+          },
+        });
+
+        if (isCancel(apiKey)) return currentProvider;
+        settings.apiKey = apiKey as string;
+      }
+
+      // Model selection
+      const model = await p.select({
+        message: 'Select model',
+        options: [
+          { value: 'gpt-4o', label: 'GPT-4o', hint: 'Latest, most capable (recommended)' },
+          { value: 'gpt-4o-mini', label: 'GPT-4o Mini', hint: 'Faster, cheaper' },
+          { value: 'gpt-4-turbo', label: 'GPT-4 Turbo', hint: 'Previous generation' },
+        ],
+      });
+
+      if (!isCancel(model)) {
+        settings.model = model as string;
+      }
+      break;
+    }
+
+    case 'ollama': {
+      settings.authMode = 'cli';
+
+      if (!available.includes('ollama')) {
+        p.log.warning('Ollama is not running. Make sure to:');
+        p.note(
+          '1. Install Ollama from https://ollama.ai\n2. Run: ollama serve\n3. Pull a model: ollama pull llama3.2',
+          'Ollama Setup'
+        );
+      }
+
+      const baseUrl = await p.text({
+        message: 'Ollama server URL',
+        initialValue: 'http://localhost:11434',
+        validate: (v) => !v ? 'Required' : undefined,
+      });
+
+      if (isCancel(baseUrl)) return currentProvider;
+      settings.baseUrl = baseUrl as string;
+
+      // Try to get available models
+      try {
+        const ollama = new OllamaProvider(undefined, settings.baseUrl);
+        if (await ollama.isConfigured()) {
+          const response = await fetch(`${settings.baseUrl}/api/tags`);
+          const data = await response.json() as { models?: Array<{ name: string }> };
+          const models = data.models?.map(m => m.name) || [];
+
+          if (models.length > 0) {
+            const model = await p.select({
+              message: 'Select model',
+              options: models.map(m => ({ value: m, label: m })),
+            });
+            if (!isCancel(model)) {
+              settings.model = model as string;
+            }
+          } else {
+            const model = await p.text({
+              message: 'Model name (e.g., llama3.2)',
+              initialValue: 'llama3.2',
+            });
+            if (!isCancel(model)) {
+              settings.model = model as string;
+            }
+          }
+        }
+      } catch {
+        const model = await p.text({
+          message: 'Model name (e.g., llama3.2)',
+          initialValue: 'llama3.2',
+        });
+        if (!isCancel(model)) {
+          settings.model = model as string;
+        }
+      }
+      break;
+    }
+
+    case 'claude-code': {
+      settings.authMode = 'cli';
+
+      if (!available.includes('claude-code')) {
+        p.log.warning('Claude Code CLI not found.');
+        p.note(
+          'Install with: npm install -g @anthropic-ai/claude-code\nThen run: claude login',
+          'Claude Code Setup'
+        );
+
+        const proceed = await p.confirm({
+          message: 'Continue anyway?',
+          initialValue: false,
+        });
+
+        if (isCancel(proceed) || !proceed) {
+          return currentProvider;
+        }
+      } else {
+        p.log.success('Claude Code CLI is configured and ready to use!');
+        p.note(
+          'This uses your existing Claude Code authentication.\nIf you have Claude Max, you get unlimited usage.',
+          'Claude Code'
+        );
+      }
+      break;
+    }
+  }
+
+  return settings;
+}
+
+// ============================================================================
 // Main Export
 // ============================================================================
 
@@ -707,9 +952,19 @@ export async function runSetup() {
     const notionCount = config.accounts.notion?.length || 0;
     const jiraCount = config.accounts.jira?.length || 0;
 
+    // Provider status
+    const providerHint = config.provider
+      ? color.green(`${config.provider.provider}${config.provider.model ? ` (${config.provider.model})` : ''}`)
+      : color.yellow('not configured');
+
     const choice = await p.select({
-      message: 'Configure integrations',
+      message: 'Configure Majordomo',
       options: [
+        {
+          value: 'provider',
+          label: color.bold('AI Provider'),
+          hint: providerHint,
+        },
         {
           value: 'slack',
           label: 'Slack',
@@ -748,6 +1003,15 @@ export async function runSetup() {
     if (isCancel(choice)) handleCancel();
 
     switch (choice) {
+      case 'provider': {
+        const newProvider = await configureProvider(config.provider);
+        if (newProvider) {
+          config.provider = newProvider;
+          p.log.success(`Provider set to ${newProvider.provider}`);
+        }
+        break;
+      }
+
       case 'slack':
         config.accounts.slack = await manageAccounts(
           'Slack',

@@ -1,18 +1,25 @@
 /**
- * Agent Runner - Direct Anthropic API Integration
+ * Agent Runner - Multi-Provider AI Integration
  *
- * Runs Claude directly via the Anthropic SDK.
+ * Runs completions via any configured provider (Anthropic, OpenAI, Ollama, Claude Code).
  * Handles streaming, tool execution, and session management.
  */
 
-import Anthropic from '@anthropic-ai/sdk';
-import type { MessageParam, Tool, ContentBlock, ToolResultBlockParam } from '@anthropic-ai/sdk/resources/messages';
 import { EventEmitter } from 'node:events';
 import { loadConfig } from '../config.js';
 import { AVAILABLE_TOOLS, executeTool, type ToolCall } from '../core/tools.js';
 import { createToolContext, type ToolContext } from '../core/accounts.js';
 import { SessionManager, type Session } from './session.js';
 import { buildSystemPrompt } from './system-prompt.js';
+import {
+  createProvider,
+  type AIProvider,
+  type Message,
+  type ContentBlock,
+  type ToolDefinition,
+  type StreamEvent,
+  type ProviderConfig,
+} from '../providers/index.js';
 
 // Agent events
 export interface AgentEvents {
@@ -37,8 +44,8 @@ export interface RunOptions {
   maxTurns?: number;
 }
 
-// Convert our tool format to Anthropic format
-function convertToolsToAnthropic(): Tool[] {
+// Convert our tool format to provider format
+function convertToolsToProvider(): ToolDefinition[] {
   return AVAILABLE_TOOLS.map((tool) => ({
     name: tool.name,
     description: tool.description,
@@ -61,22 +68,58 @@ function convertToolsToAnthropic(): Tool[] {
 }
 
 export class AgentRunner extends EventEmitter {
-  private client: Anthropic;
+  private provider: AIProvider;
   private sessionManager: SessionManager;
   private toolContext: ToolContext | null = null;
-  private model: string;
 
-  constructor(options: { model?: string } = {}) {
+  constructor(providerOrConfig?: AIProvider | ProviderConfig) {
     super();
 
-    const apiKey = process.env.ANTHROPIC_API_KEY;
-    if (!apiKey) {
-      throw new Error('ANTHROPIC_API_KEY environment variable is required');
+    if (providerOrConfig && 'complete' in providerOrConfig) {
+      // It's an AIProvider instance
+      this.provider = providerOrConfig;
+    } else if (providerOrConfig) {
+      // It's a ProviderConfig
+      this.provider = createProvider(providerOrConfig);
+    } else {
+      // Try to auto-detect from config or environment
+      this.provider = this.initializeProvider();
     }
 
-    this.client = new Anthropic({ apiKey });
     this.sessionManager = new SessionManager();
-    this.model = options.model || 'claude-sonnet-4-20250514';
+  }
+
+  private initializeProvider(): AIProvider {
+    // Priority: Config file > Environment variables > Error
+    const config = loadConfigSync();
+
+    if (config?.provider) {
+      return createProvider(config.provider);
+    }
+
+    // Fall back to environment-based detection
+    if (process.env.ANTHROPIC_API_KEY) {
+      return createProvider({
+        provider: 'anthropic',
+        authMode: 'api_key',
+        apiKey: process.env.ANTHROPIC_API_KEY,
+        model: process.env.ANTHROPIC_MODEL,
+      });
+    }
+
+    if (process.env.OPENAI_API_KEY) {
+      return createProvider({
+        provider: 'openai',
+        authMode: 'api_key',
+        apiKey: process.env.OPENAI_API_KEY,
+        model: process.env.OPENAI_MODEL,
+      });
+    }
+
+    throw new Error(
+      'No AI provider configured. Run `majordomo --setup` to configure a provider, ' +
+      'or set ANTHROPIC_API_KEY or OPENAI_API_KEY environment variable.'
+    );
   }
 
   private async getToolContext(): Promise<ToolContext> {
@@ -103,12 +146,18 @@ export class AgentRunner extends EventEmitter {
     });
 
     const systemPrompt = await buildSystemPrompt();
-    const tools = convertToolsToAnthropic();
+    const tools = convertToolsToProvider();
     const toolContext = await this.getToolContext();
 
     let fullResponse = '';
     const toolsUsed: string[] = [];
     let turns = 0;
+
+    // Convert session messages to provider format
+    const providerMessages: Message[] = session.messages.map((m) => ({
+      role: m.role as 'user' | 'assistant',
+      content: m.content as string | ContentBlock[],
+    }));
 
     while (turns < maxTurns) {
       turns++;
@@ -116,7 +165,7 @@ export class AgentRunner extends EventEmitter {
       if (stream) {
         const result = await this.runStreamingTurn(
           systemPrompt,
-          session.messages,
+          providerMessages,
           tools,
           toolContext
         );
@@ -130,13 +179,13 @@ export class AgentRunner extends EventEmitter {
         }
 
         // Add assistant message with tool calls
-        session.messages.push({
+        providerMessages.push({
           role: 'assistant',
           content: result.contentBlocks,
         });
 
         // Execute tools and add results
-        const toolResults: ToolResultBlockParam[] = [];
+        const toolResults: ContentBlock[] = [];
         for (const toolCall of result.toolCalls) {
           const toolInput = toolCall.input as Record<string, unknown>;
           this.emit('tool:start', toolCall.name, toolInput);
@@ -166,27 +215,26 @@ export class AgentRunner extends EventEmitter {
           }
         }
 
-        // Add tool results
-        session.messages.push({
+        // Add tool results as user message
+        providerMessages.push({
           role: 'user',
           content: toolResults,
         });
       } else {
-        // Non-streaming (simpler but less responsive)
-        const response = await this.client.messages.create({
-          model: this.model,
-          max_tokens: 8192,
-          system: systemPrompt,
-          messages: session.messages,
+        // Non-streaming
+        const response = await this.provider.complete({
+          messages: providerMessages,
+          systemPrompt,
           tools,
+          maxTokens: 8192,
         });
 
         // Process response
         for (const block of response.content) {
-          if (block.type === 'text') {
+          if (block.type === 'text' && block.text) {
             fullResponse = block.text;
             this.emit('text', block.text);
-          } else if (block.type === 'tool_use') {
+          } else if (block.type === 'tool_use' && block.id && block.name) {
             toolsUsed.push(block.name);
             this.emit('tool:start', block.name, block.input as Record<string, unknown>);
 
@@ -202,11 +250,17 @@ export class AgentRunner extends EventEmitter {
           }
         }
 
-        if (response.stop_reason !== 'tool_use') {
+        if (response.stopReason !== 'tool_use') {
           break;
         }
       }
     }
+
+    // Update session with final messages
+    session.messages = providerMessages.map((m) => ({
+      role: m.role,
+      content: m.content,
+    })) as typeof session.messages;
 
     // Add final assistant response
     if (fullResponse) {
@@ -233,8 +287,8 @@ export class AgentRunner extends EventEmitter {
 
   private async runStreamingTurn(
     systemPrompt: string,
-    messages: MessageParam[],
-    tools: Tool[],
+    messages: Message[],
+    tools: ToolDefinition[],
     toolContext: ToolContext
   ): Promise<{
     text: string;
@@ -242,48 +296,80 @@ export class AgentRunner extends EventEmitter {
     toolsUsed: string[];
     contentBlocks: ContentBlock[];
   }> {
-    const stream = this.client.messages.stream({
-      model: this.model,
-      max_tokens: 8192,
-      system: systemPrompt,
-      messages,
-      tools,
-    });
-
     let text = '';
     const toolCalls: Array<{ id: string; name: string; input: unknown }> = [];
     const toolsUsed: string[] = [];
     const contentBlocks: ContentBlock[] = [];
 
-    for await (const event of stream) {
-      if (event.type === 'content_block_delta') {
-        if (event.delta.type === 'text_delta') {
-          text += event.delta.text;
-          this.emit('text', event.delta.text);
-        }
-      } else if (event.type === 'content_block_stop') {
-        // Block completed
-      } else if (event.type === 'message_delta') {
-        // Message metadata update
+    for await (const event of this.provider.stream({
+      messages,
+      systemPrompt,
+      tools,
+      maxTokens: 8192,
+    })) {
+      switch (event.type) {
+        case 'text':
+          if (event.text) {
+            text += event.text;
+            this.emit('text', event.text);
+          }
+          break;
+
+        case 'tool_use':
+          if (event.toolCall) {
+            toolCalls.push({
+              id: event.toolCall.id,
+              name: event.toolCall.name,
+              input: event.toolCall.input,
+            });
+            toolsUsed.push(event.toolCall.name);
+            contentBlocks.push({
+              type: 'tool_use',
+              id: event.toolCall.id,
+              name: event.toolCall.name,
+              input: event.toolCall.input,
+            });
+          }
+          break;
+
+        case 'error':
+          this.emit('error', new Error(event.error || 'Unknown streaming error'));
+          break;
+
+        case 'done':
+          // Stream complete
+          break;
       }
     }
 
-    // Get the final message to extract tool calls
-    const finalMessage = await stream.finalMessage();
-
-    for (const block of finalMessage.content) {
-      contentBlocks.push(block);
-      if (block.type === 'tool_use') {
-        toolCalls.push({
-          id: block.id,
-          name: block.name,
-          input: block.input,
-        });
-        toolsUsed.push(block.name);
-      }
+    // Add text content block if present
+    if (text) {
+      contentBlocks.unshift({ type: 'text', text });
     }
 
     return { text, toolCalls, toolsUsed, contentBlocks };
+  }
+
+  get providerName(): string {
+    return this.provider.name;
+  }
+
+  get modelName(): string {
+    return this.provider.model;
+  }
+}
+
+// Synchronous config loader (for constructor)
+function loadConfigSync() {
+  try {
+    const fs = require('node:fs');
+    const path = require('node:path');
+    const os = require('node:os');
+    const configPath = path.join(os.homedir(), '.majordomo', 'config.json');
+    const content = fs.readFileSync(configPath, 'utf-8');
+    return JSON.parse(content);
+  } catch {
+    return null;
   }
 }
 
