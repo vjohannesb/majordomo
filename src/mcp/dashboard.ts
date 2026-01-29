@@ -31,7 +31,6 @@ export async function getServicesStatus(userId: string): Promise<ServiceConfig[]
   const slackTokens = tokens.filter(t => t.provider === 'slack');
   const linearTokens = tokens.filter(t => t.provider === 'linear');
   const notionTokens = tokens.filter(t => t.provider === 'notion');
-  const discordTokens = tokens.filter(t => t.provider === 'discord');
 
   return [
     {
@@ -72,16 +71,6 @@ export async function getServicesStatus(userId: string): Promise<ServiceConfig[]
       authType: 'apikey',
       connected: notionTokens.length > 0,
       accounts: notionTokens.map(t => ({ name: t.accountName })),
-    },
-    {
-      id: 'discord',
-      name: 'Discord',
-      icon: '🎮',
-      description: 'Discord messaging',
-      authType: 'oauth',
-      authUrl: '/auth/discord',
-      connected: discordTokens.length > 0,
-      accounts: discordTokens.map(t => ({ name: t.accountName })),
     },
   ];
 }

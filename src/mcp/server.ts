@@ -40,8 +40,6 @@ import {
   validateApiKey,
   getSlackAuthUrl,
   handleSlackCallback,
-  getDiscordAuthUrl,
-  handleDiscordCallback,
   getLinearAuthUrl,
   handleLinearCallback,
 } from './auth.js';
@@ -70,9 +68,6 @@ import {
   listNotionDatabases,
   queryNotionDatabase,
 } from './services/notion.js';
-import {
-  listDiscordServers,
-} from './services/discord.js';
 import {
   renderDashboard,
   renderApiKeySetup,
@@ -368,17 +363,6 @@ const TOOLS = [
       required: ['databaseId'],
     },
   },
-  // Discord tools (read-only - Discord doesn't allow sending as user)
-  {
-    name: 'discord_list_servers',
-    description: 'List Discord servers you are in',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        account: { type: 'string', description: 'Account name' },
-      },
-    },
-  },
 ];
 
 // ============================================================================
@@ -567,12 +551,6 @@ async function executeTool(
       return queryNotionDatabase(userId, databaseId, { limit, account });
     }
 
-    // Discord tools (read-only)
-    case 'discord_list_servers': {
-      const { account } = args as { account?: string };
-      return listDiscordServers(userId, account);
-    }
-
     default:
       return `Unknown tool: ${toolName}`;
   }
@@ -691,64 +669,6 @@ app.get('/auth/slack/callback', async (c) => {
       <html><body>
         <h1>Slack Connected!</h1>
         <p>Successfully connected to workspace: ${teamName}</p>
-        <p><a href="/dashboard">Back to Dashboard</a></p>
-      </body></html>
-    `);
-  } catch (error) {
-    return c.json({ error: String(error) }, 500);
-  }
-});
-
-// Discord OAuth
-app.get('/auth/discord', async (c) => {
-  const user = await getCurrentUser(c);
-  if (!user) {
-    return c.redirect('/auth/google');
-  }
-
-  try {
-    const url = getDiscordAuthUrl(user.id);
-    return c.redirect(url);
-  } catch (error) {
-    return c.html(`
-      <html><body>
-        <h1>Discord OAuth Not Configured</h1>
-        <p>Set DISCORD_CLIENT_ID and DISCORD_CLIENT_SECRET environment variables.</p>
-        <p><a href="/dashboard">Back to Dashboard</a></p>
-      </body></html>
-    `);
-  }
-});
-
-app.get('/auth/discord/callback', async (c) => {
-  const code = c.req.query('code');
-  const state = c.req.query('state');
-  const guildId = c.req.query('guild_id'); // Present if bot was added
-
-  if (!code) {
-    return c.json({ error: 'No code provided' }, 400);
-  }
-
-  const user = await getCurrentUser(c);
-  const odmoUserId = user?.id || state;
-
-  if (!odmoUserId) {
-    return c.json({ error: 'No user session' }, 401);
-  }
-
-  try {
-    const { username, guildName } = await handleDiscordCallback(code, odmoUserId);
-    const guildMessage = guildName
-      ? `<p>Bot added to server: ${guildName}</p>`
-      : guildId
-        ? `<p>Bot added to server ID: ${guildId}</p>`
-        : '<p>You can now add the bot to servers from Discord.</p>';
-
-    return c.html(`
-      <html><body>
-        <h1>Discord Connected!</h1>
-        <p>Connected as: ${username}</p>
-        ${guildMessage}
         <p><a href="/dashboard">Back to Dashboard</a></p>
       </body></html>
     `);
