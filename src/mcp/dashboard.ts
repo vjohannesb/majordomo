@@ -384,9 +384,23 @@ export async function renderDashboard(user: User): Promise<string> {
       </div>
 
       <div class="config-box" style="margin-top: 15px;">
-        <h3>Manual Configuration</h3>
+        <h3>Claude Desktop</h3>
         <p style="font-size: 13px; color: #666; margin-bottom: 10px;">
-          For Claude Desktop, Claude Code, or other MCP clients:
+          In Claude Desktop, go to Settings &rarr; MCP &rarr; Add Server. Enter the URL below and sign in with Google.
+        </p>
+        <pre><code>${BASE_URL}/mcp/sse</code></pre>
+        <button class="copy-btn" onclick="navigator.clipboard.writeText('${BASE_URL}/mcp/sse')">
+          Copy URL
+        </button>
+        <p style="font-size: 11px; color: #888; margin-top: 8px;">
+          Claude Desktop uses OAuth - it will open a sign-in page automatically.
+        </p>
+      </div>
+
+      <div class="config-box" style="margin-top: 15px;">
+        <h3>Claude Code &amp; Other Clients</h3>
+        <p style="font-size: 13px; color: #666; margin-bottom: 10px;">
+          For Claude Code CLI and clients that use API keys:
         </p>
         <pre><code>{
   "mcpServers": {

@@ -5,7 +5,7 @@
  * Can be used with Claude App, Claude Code, or any MCP-compatible client.
  */
 
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { cors } from 'hono/cors';
 import { streamSSE } from 'hono/streaming';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
@@ -14,6 +14,7 @@ import {
   CallToolRequestSchema,
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
+import * as crypto from 'node:crypto';
 
 import { config } from 'dotenv';
 config();
@@ -87,7 +88,15 @@ import {
 } from './services/notifications.js';
 
 const PORT = parseInt(process.env.PORT || '3000');
+const BASE_URL = process.env.BASE_URL || `http://localhost:${PORT}`;
 const isProduction = process.env.NODE_ENV === 'production';
+
+// Store for OAuth authorization codes (in production, use Redis/DB)
+const authorizationCodes = new Map<string, { userId: string; clientId: string; redirectUri: string; expiresAt: number }>();
+// Store for dynamically registered clients
+const registeredClients = new Map<string, { clientId: string; clientSecret: string; redirectUris: string[] }>();
+// Store for access tokens
+const accessTokens = new Map<string, { userId: string; clientId: string; expiresAt: number }>();
 
 // ============================================================================
 // Tool Definitions
@@ -606,6 +615,238 @@ app.use('*', cors({
 // Health check
 app.get('/health', (c) => c.json({ status: 'ok', service: 'majordomo-mcp' }));
 
+// ============================================================================
+// MCP OAuth 2.1 Endpoints (for Claude Desktop and other MCP clients)
+// ============================================================================
+
+// Protected Resource Metadata (RFC 9728)
+app.get('/.well-known/oauth-protected-resource', (c) => {
+  return c.json({
+    resource: BASE_URL,
+    authorization_servers: [BASE_URL],
+    bearer_methods_supported: ['header'],
+    resource_signing_alg_values_supported: ['RS256'],
+  });
+});
+
+// OAuth Authorization Server Metadata
+app.get('/.well-known/oauth-authorization-server', (c) => {
+  return c.json({
+    issuer: BASE_URL,
+    authorization_endpoint: `${BASE_URL}/oauth/authorize`,
+    token_endpoint: `${BASE_URL}/oauth/token`,
+    registration_endpoint: `${BASE_URL}/oauth/register`,
+    token_endpoint_auth_methods_supported: ['client_secret_post', 'client_secret_basic'],
+    grant_types_supported: ['authorization_code', 'refresh_token'],
+    response_types_supported: ['code'],
+    code_challenge_methods_supported: ['S256'],
+    scopes_supported: ['mcp:tools', 'mcp:resources', 'mcp:prompts'],
+    service_documentation: `${BASE_URL}/docs`,
+  });
+});
+
+// Dynamic Client Registration (RFC 7591)
+app.post('/oauth/register', async (c) => {
+  try {
+    const body = await c.req.json();
+    const { redirect_uris, client_name } = body;
+
+    if (!redirect_uris || !Array.isArray(redirect_uris) || redirect_uris.length === 0) {
+      return c.json({ error: 'invalid_client_metadata', error_description: 'redirect_uris is required' }, 400);
+    }
+
+    // Generate client credentials
+    const clientId = `mcp_${crypto.randomBytes(16).toString('hex')}`;
+    const clientSecret = crypto.randomBytes(32).toString('hex');
+
+    // Store client registration
+    registeredClients.set(clientId, {
+      clientId,
+      clientSecret,
+      redirectUris: redirect_uris,
+    });
+
+    console.log(`Registered MCP client: ${client_name || clientId}`);
+
+    return c.json({
+      client_id: clientId,
+      client_secret: clientSecret,
+      client_name: client_name || 'MCP Client',
+      redirect_uris,
+      grant_types: ['authorization_code', 'refresh_token'],
+      response_types: ['code'],
+      token_endpoint_auth_method: 'client_secret_post',
+    }, 201);
+  } catch (error) {
+    console.error('Client registration error:', error);
+    return c.json({ error: 'invalid_request' }, 400);
+  }
+});
+
+// OAuth Authorization Endpoint
+app.get('/oauth/authorize', async (c) => {
+  const clientId = c.req.query('client_id');
+  const redirectUri = c.req.query('redirect_uri');
+  const responseType = c.req.query('response_type');
+  const state = c.req.query('state');
+  const codeChallenge = c.req.query('code_challenge');
+  const codeChallengeMethod = c.req.query('code_challenge_method');
+
+  // Validate required parameters
+  if (!clientId || !redirectUri || responseType !== 'code') {
+    return c.json({ error: 'invalid_request', error_description: 'Missing required parameters' }, 400);
+  }
+
+  // Store OAuth request parameters in session/cookie for after Google auth
+  const oauthState = Buffer.from(JSON.stringify({
+    clientId,
+    redirectUri,
+    state,
+    codeChallenge,
+    codeChallengeMethod,
+  })).toString('base64url');
+
+  // Check if user is already logged in
+  const existingUser = await getCurrentUser(c);
+  if (existingUser) {
+    // User is logged in, generate auth code and redirect
+    return handleMcpAuthorization(c, existingUser.id, { clientId, redirectUri, state, codeChallenge, codeChallengeMethod });
+  }
+
+  // Redirect to Google OAuth with MCP state
+  const googleAuthUrl = getGoogleAuthUrl(`mcp:${oauthState}`);
+  return c.redirect(googleAuthUrl);
+});
+
+// Helper to handle MCP authorization after user is authenticated
+async function handleMcpAuthorization(
+  c: Context,
+  userId: string,
+  params: { clientId: string; redirectUri: string; state?: string; codeChallenge?: string; codeChallengeMethod?: string }
+) {
+  const { clientId, redirectUri, state, codeChallenge, codeChallengeMethod } = params;
+
+  // Generate authorization code
+  const authCode = crypto.randomBytes(32).toString('hex');
+
+  // Store the code (expires in 10 minutes)
+  authorizationCodes.set(authCode, {
+    userId,
+    clientId,
+    redirectUri,
+    expiresAt: Date.now() + 10 * 60 * 1000,
+  });
+
+  // Build redirect URL with code
+  const redirectUrl = new URL(redirectUri);
+  redirectUrl.searchParams.set('code', authCode);
+  if (state) {
+    redirectUrl.searchParams.set('state', state);
+  }
+
+  return c.redirect(redirectUrl.toString());
+}
+
+// OAuth Token Endpoint
+app.post('/oauth/token', async (c) => {
+  let body: Record<string, string>;
+  const contentType = c.req.header('content-type');
+
+  if (contentType?.includes('application/json')) {
+    body = await c.req.json();
+  } else {
+    const formData = await c.req.parseBody();
+    body = Object.fromEntries(Object.entries(formData).map(([k, v]) => [k, String(v)]));
+  }
+
+  const { grant_type, code, redirect_uri, client_id, client_secret } = body;
+
+  // Also check for client credentials in Authorization header
+  let headerClientId = client_id;
+  let headerClientSecret = client_secret;
+  const authHeader = c.req.header('Authorization');
+  if (authHeader?.startsWith('Basic ')) {
+    const decoded = Buffer.from(authHeader.slice(6), 'base64').toString();
+    const [id, secret] = decoded.split(':');
+    headerClientId = id;
+    headerClientSecret = secret;
+  }
+
+  if (grant_type === 'authorization_code') {
+    if (!code) {
+      return c.json({ error: 'invalid_request', error_description: 'Missing authorization code' }, 400);
+    }
+
+    const codeData = authorizationCodes.get(code);
+    if (!codeData) {
+      return c.json({ error: 'invalid_grant', error_description: 'Invalid or expired authorization code' }, 400);
+    }
+
+    // Validate the code hasn't expired
+    if (Date.now() > codeData.expiresAt) {
+      authorizationCodes.delete(code);
+      return c.json({ error: 'invalid_grant', error_description: 'Authorization code expired' }, 400);
+    }
+
+    // Delete the code (one-time use)
+    authorizationCodes.delete(code);
+
+    // Generate access token
+    const accessToken = crypto.randomBytes(32).toString('hex');
+    const refreshToken = crypto.randomBytes(32).toString('hex');
+    const expiresIn = 3600; // 1 hour
+
+    // Store access token
+    accessTokens.set(accessToken, {
+      userId: codeData.userId,
+      clientId: codeData.clientId,
+      expiresAt: Date.now() + expiresIn * 1000,
+    });
+
+    return c.json({
+      access_token: accessToken,
+      token_type: 'Bearer',
+      expires_in: expiresIn,
+      refresh_token: refreshToken,
+      scope: 'mcp:tools mcp:resources mcp:prompts',
+    });
+  }
+
+  return c.json({ error: 'unsupported_grant_type' }, 400);
+});
+
+// Token introspection endpoint
+app.post('/oauth/introspect', async (c) => {
+  let body: Record<string, string>;
+  const contentType = c.req.header('content-type');
+
+  if (contentType?.includes('application/json')) {
+    body = await c.req.json();
+  } else {
+    const formData = await c.req.parseBody();
+    body = Object.fromEntries(Object.entries(formData).map(([k, v]) => [k, String(v)]));
+  }
+
+  const { token } = body;
+
+  if (!token) {
+    return c.json({ active: false });
+  }
+
+  const tokenData = accessTokens.get(token);
+  if (!tokenData || Date.now() > tokenData.expiresAt) {
+    return c.json({ active: false });
+  }
+
+  return c.json({
+    active: true,
+    client_id: tokenData.clientId,
+    sub: tokenData.userId,
+    scope: 'mcp:tools mcp:resources mcp:prompts',
+    exp: Math.floor(tokenData.expiresAt / 1000),
+  });
+});
+
 // Auth routes
 app.get('/auth/google', async (c) => {
   // Check if user is already logged in (adding another account)
@@ -624,6 +865,18 @@ app.get('/auth/callback', async (c) => {
   }
 
   try {
+    // Check if this is an MCP OAuth flow
+    if (state?.startsWith('mcp:')) {
+      const mcpState = state.slice(4);
+      const mcpParams = JSON.parse(Buffer.from(mcpState, 'base64url').toString());
+
+      // Complete Google auth and get user
+      const user = await handleOAuthCallback(code, c);
+
+      // Now redirect to MCP client with auth code
+      return handleMcpAuthorization(c, user.id, mcpParams);
+    }
+
     // Check if adding to existing user
     const existingUserId = state?.startsWith('add:') ? state.slice(4) : undefined;
     await handleOAuthCallback(code, c, existingUserId);
@@ -928,7 +1181,6 @@ app.get('/services/:service/disconnect', async (c) => {
 // Webhooks
 // ============================================================================
 
-const crypto = require('node:crypto');
 const LINEAR_WEBHOOK_SECRET = process.env.LINEAR_WEBHOOK_SECRET;
 
 function verifyLinearSignature(signature: string | undefined, rawBody: string): boolean {
@@ -1077,19 +1329,34 @@ app.post('/webhooks/notion', async (c) => {
   }
 });
 
-// MCP SSE endpoint (for remote Claude clients)
-app.get('/mcp/sse', async (c) => {
-  // Authenticate via API key
+// Helper to authenticate MCP requests (supports both API keys and OAuth tokens)
+function authenticateMcpRequest(c: Context): string | null {
   const authHeader = c.req.header('Authorization');
-  const apiKey = authHeader?.replace('Bearer ', '');
+  const token = authHeader?.replace('Bearer ', '');
 
-  if (!apiKey) {
-    return c.json({ error: 'Missing API key' }, 401);
+  if (!token) {
+    return null;
   }
 
-  const userId = validateApiKey(apiKey);
+  // First, try as OAuth token
+  const tokenData = accessTokens.get(token);
+  if (tokenData && Date.now() < tokenData.expiresAt) {
+    return tokenData.userId;
+  }
+
+  // Fall back to API key
+  return validateApiKey(token);
+}
+
+// MCP SSE endpoint (for remote Claude clients)
+app.get('/mcp/sse', async (c) => {
+  // Authenticate via OAuth token or API key
+  const userId = authenticateMcpRequest(c);
+
   if (!userId) {
-    return c.json({ error: 'Invalid API key' }, 401);
+    // Return WWW-Authenticate header for OAuth discovery
+    c.header('WWW-Authenticate', `Bearer resource="${BASE_URL}"`);
+    return c.json({ error: 'Missing or invalid authorization' }, 401);
   }
 
   // Return SSE stream for MCP
@@ -1117,16 +1384,11 @@ app.get('/mcp/sse', async (c) => {
 
 // MCP HTTP endpoint (simpler request/response)
 app.post('/mcp/tools/:toolName', async (c) => {
-  const authHeader = c.req.header('Authorization');
-  const apiKey = authHeader?.replace('Bearer ', '');
+  const userId = authenticateMcpRequest(c);
 
-  if (!apiKey) {
-    return c.json({ error: 'Missing API key' }, 401);
-  }
-
-  const userId = validateApiKey(apiKey);
   if (!userId) {
-    return c.json({ error: 'Invalid API key' }, 401);
+    c.header('WWW-Authenticate', `Bearer resource="${BASE_URL}"`);
+    return c.json({ error: 'Missing or invalid authorization' }, 401);
   }
 
   const toolName = c.req.param('toolName');
