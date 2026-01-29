@@ -4,8 +4,8 @@
  * Provides HTML pages for user configuration and service management.
  */
 
-import type { User } from './db.js';
-import { getOAuthTokens } from './db.js';
+import type { User, UserSettings } from './db.js';
+import { getOAuthTokens, getUserSettings } from './db.js';
 import { generateApiKey } from './auth.js';
 
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
@@ -83,6 +83,9 @@ export async function renderDashboard(user: User): Promise<string> {
   const services = await getServicesStatus(user.id);
   const apiKey = generateApiKey(user.id);
   const connectedCount = services.filter(s => s.connected).length;
+  const settings = await getUserSettings(user.id);
+  const notificationChannel = settings?.notificationChannel || 'none';
+  const hasSlack = services.find(s => s.id === 'slack')?.connected || false;
 
   const serviceCards = services.map(service => {
     const accountsList = service.accounts.length > 0
@@ -303,6 +306,43 @@ export async function renderDashboard(user: User): Promise<string> {
     <section>
       <h2>Connected Services</h2>
       ${serviceCards}
+    </section>
+
+    <section>
+      <h2>Notifications</h2>
+      <div class="config-box">
+        <p style="margin-bottom: 15px; color: #666;">
+          Get notified when things happen in Linear, Notion, and other services.
+        </p>
+        <form method="POST" action="/settings/notifications" style="display: flex; flex-direction: column; gap: 15px;">
+          <div>
+            <label style="display: block; margin-bottom: 8px; font-weight: 500;">Notification Channel</label>
+            <select name="channel" style="width: 100%; padding: 10px; border: 2px solid #e5e7eb; border-radius: 8px; font-size: 14px;">
+              <option value="none" ${notificationChannel === 'none' ? 'selected' : ''}>Disabled</option>
+              <option value="slack" ${notificationChannel === 'slack' ? 'selected' : ''} ${!hasSlack ? 'disabled' : ''}>
+                Slack ${!hasSlack ? '(connect Slack first)' : ''}
+              </option>
+              <option value="email" ${notificationChannel === 'email' ? 'selected' : ''}>Email (via Gmail)</option>
+            </select>
+          </div>
+          <button type="submit" class="btn btn-primary" style="align-self: flex-start;">Save Preferences</button>
+        </form>
+      </div>
+
+      <div class="config-box" style="margin-top: 15px;">
+        <h3>Webhook URLs</h3>
+        <p style="font-size: 13px; color: #666; margin-bottom: 10px;">
+          Configure these URLs in Linear and Notion to receive real-time updates.
+        </p>
+        <div style="margin-bottom: 10px;">
+          <label style="font-size: 12px; color: #888;">Linear Webhook URL:</label>
+          <code style="display: block; background: #f8f9fa; padding: 8px; border-radius: 4px; font-size: 12px;">${BASE_URL}/webhooks/linear</code>
+        </div>
+        <div>
+          <label style="font-size: 12px; color: #888;">Notion Webhook URL:</label>
+          <code style="display: block; background: #f8f9fa; padding: 8px; border-radius: 4px; font-size: 12px;">${BASE_URL}/webhooks/notion</code>
+        </div>
+      </div>
     </section>
 
     <section>

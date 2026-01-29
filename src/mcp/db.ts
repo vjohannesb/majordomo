@@ -71,6 +71,17 @@ export async function initDatabase() {
     ON memories(user_id, type)
   `;
 
+  // User settings for notifications
+  await sql`
+    CREATE TABLE IF NOT EXISTS user_settings (
+      user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      notification_channel TEXT DEFAULT 'none' CHECK(notification_channel IN ('slack', 'email', 'none')),
+      slack_channel_id TEXT,
+      webhook_secrets JSONB DEFAULT '{}',
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `;
+
   console.log('Database initialized');
 }
 
@@ -321,4 +332,82 @@ function rowToMemory(row: Record<string, unknown>): Memory {
     createdAt: row.created_at as Date,
     updatedAt: row.updated_at as Date,
   };
+}
+
+// ============================================================================
+// User Settings / Notification Preferences
+// ============================================================================
+
+export interface UserSettings {
+  userId: string;
+  notificationChannel: 'slack' | 'email' | 'none';
+  slackChannelId?: string;
+  webhookSecrets?: Record<string, string>; // e.g., { notion: 'secret_xxx' }
+}
+
+export async function initSettingsTable() {
+  if (!sql) throw new Error('Database not configured');
+
+  await sql`
+    CREATE TABLE IF NOT EXISTS user_settings (
+      user_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+      notification_channel TEXT DEFAULT 'none' CHECK(notification_channel IN ('slack', 'email', 'none')),
+      slack_channel_id TEXT,
+      webhook_secrets JSONB DEFAULT '{}',
+      updated_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `;
+}
+
+export async function getUserSettings(userId: string): Promise<UserSettings | null> {
+  if (!sql) throw new Error('Database not configured');
+
+  const [row] = await sql`SELECT * FROM user_settings WHERE user_id = ${userId}`;
+  if (!row) return null;
+
+  return {
+    userId: row.user_id,
+    notificationChannel: row.notification_channel,
+    slackChannelId: row.slack_channel_id,
+    webhookSecrets: row.webhook_secrets || {},
+  };
+}
+
+export async function saveUserSettings(settings: UserSettings): Promise<void> {
+  if (!sql) throw new Error('Database not configured');
+
+  const slackChannelId = settings.slackChannelId ?? null;
+  const webhookSecrets = JSON.stringify(settings.webhookSecrets || {});
+
+  await sql`
+    INSERT INTO user_settings (user_id, notification_channel, slack_channel_id, webhook_secrets)
+    VALUES (${settings.userId}, ${settings.notificationChannel}, ${slackChannelId}, ${webhookSecrets})
+    ON CONFLICT (user_id) DO UPDATE SET
+      notification_channel = EXCLUDED.notification_channel,
+      slack_channel_id = EXCLUDED.slack_channel_id,
+      webhook_secrets = EXCLUDED.webhook_secrets,
+      updated_at = NOW()
+  `;
+}
+
+export async function saveWebhookSecret(userId: string, provider: string, secret: string): Promise<void> {
+  if (!sql) throw new Error('Database not configured');
+
+  // Get existing settings or create new
+  const existing = await getUserSettings(userId);
+  const webhookSecrets = existing?.webhookSecrets || {};
+  webhookSecrets[provider] = secret;
+
+  await sql`
+    INSERT INTO user_settings (user_id, webhook_secrets)
+    VALUES (${userId}, ${JSON.stringify(webhookSecrets)})
+    ON CONFLICT (user_id) DO UPDATE SET
+      webhook_secrets = ${JSON.stringify(webhookSecrets)},
+      updated_at = NOW()
+  `;
+}
+
+export async function getWebhookSecret(userId: string, provider: string): Promise<string | null> {
+  const settings = await getUserSettings(userId);
+  return settings?.webhookSecrets?.[provider] || null;
 }

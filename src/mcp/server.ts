@@ -28,6 +28,10 @@ import {
   getOAuthTokens,
   saveOAuthToken,
   deleteOAuthToken,
+  getUserSettings,
+  saveUserSettings,
+  saveWebhookSecret,
+  getWebhookSecret,
   type Memory,
 } from './db.js';
 import {
@@ -75,6 +79,11 @@ import {
   renderApiKeySetup,
   renderServiceManage,
 } from './dashboard.js';
+import {
+  sendNotification,
+  formatLinearNotification,
+  formatNotionNotification,
+} from './services/notifications.js';
 
 const PORT = parseInt(process.env.PORT || '3000');
 const isProduction = process.env.NODE_ENV === 'production';
@@ -799,6 +808,26 @@ app.get('/dashboard', async (c) => {
   return c.html(await renderDashboard(user));
 });
 
+// Notification settings
+app.post('/settings/notifications', async (c) => {
+  const user = await getCurrentUser(c);
+  if (!user) return c.redirect('/auth/google');
+
+  const body = await c.req.parseBody();
+  const channel = body['channel'] as 'slack' | 'email' | 'none';
+
+  if (!['slack', 'email', 'none'].includes(channel)) {
+    return c.redirect('/dashboard');
+  }
+
+  await saveUserSettings({
+    userId: user.id,
+    notificationChannel: channel,
+  });
+
+  return c.redirect('/dashboard');
+});
+
 // Service management routes
 app.get('/services/:service/setup', async (c) => {
   const user = await getCurrentUser(c);
@@ -855,15 +884,15 @@ app.get('/services/:service/disconnect', async (c) => {
 });
 
 // ============================================================================
-// Linear Webhooks
+// Webhooks
 // ============================================================================
 
+const crypto = require('node:crypto');
 const LINEAR_WEBHOOK_SECRET = process.env.LINEAR_WEBHOOK_SECRET;
 
 function verifyLinearSignature(signature: string | undefined, rawBody: string): boolean {
   if (!signature || !LINEAR_WEBHOOK_SECRET) return false;
 
-  const crypto = require('node:crypto');
   const computedSignature = crypto
     .createHmac('sha256', LINEAR_WEBHOOK_SECRET)
     .update(rawBody)
@@ -875,6 +904,16 @@ function verifyLinearSignature(signature: string | undefined, rawBody: string): 
   );
 }
 
+// Find users who have a specific provider connected (for webhook routing)
+async function findUsersWithProvider(provider: string): Promise<string[]> {
+  if (!sql) return [];
+  const rows = await sql`
+    SELECT DISTINCT user_id FROM oauth_tokens WHERE provider = ${provider}
+  `;
+  return rows.map(r => r.user_id);
+}
+
+// Linear Webhook
 app.post('/webhooks/linear', async (c) => {
   const rawBody = await c.req.text();
   const signature = c.req.header('linear-signature');
@@ -886,7 +925,7 @@ app.post('/webhooks/linear', async (c) => {
   }
 
   const payload = JSON.parse(rawBody);
-  const { action, type, data, actor, url, createdAt, webhookTimestamp, updatedFrom } = payload;
+  const { action, type, data, actor, webhookTimestamp } = payload;
 
   // Verify timestamp (within 60 seconds)
   if (Math.abs(Date.now() - webhookTimestamp) > 60 * 1000) {
@@ -896,69 +935,103 @@ app.post('/webhooks/linear', async (c) => {
 
   console.log(`Linear webhook: ${action} ${type}`, { id: data?.id, actor: actor?.name });
 
-  // Handle different event types
   try {
-    switch (type) {
-      case 'Issue': {
-        const issueTitle = data.title;
-        const issueId = data.identifier || data.id;
-        const state = data.state?.name;
-        const assignee = data.assignee?.name;
+    // Format notification
+    const notification = formatLinearNotification(action, type, data, actor);
 
-        if (action === 'create') {
-          console.log(`New issue created: ${issueId} - ${issueTitle}`);
-          // Could add memory: "New Linear issue created: {title}"
-        } else if (action === 'update') {
-          const changes = Object.keys(updatedFrom || {}).join(', ');
-          console.log(`Issue updated: ${issueId} - Changed: ${changes}`);
-
-          // If state changed to Done/Completed
-          if (updatedFrom?.stateId && state?.toLowerCase().includes('done')) {
-            console.log(`Issue completed: ${issueId} - ${issueTitle}`);
-          }
-        } else if (action === 'remove') {
-          console.log(`Issue removed: ${issueId}`);
-        }
-        break;
+    if (notification) {
+      // Find all users with Linear connected and notify them
+      const userIds = await findUsersWithProvider('linear');
+      for (const userId of userIds) {
+        const result = await sendNotification(userId, notification);
+        console.log(`Notification sent to ${userId}:`, result);
       }
-
-      case 'Comment': {
-        const commentBody = data.body;
-        const issueId = data.issue?.identifier;
-
-        if (action === 'create') {
-          console.log(`New comment on ${issueId} by ${actor?.name}: ${commentBody?.slice(0, 100)}`);
-        }
-        break;
-      }
-
-      case 'Project': {
-        const projectName = data.name;
-
-        if (action === 'create') {
-          console.log(`New project created: ${projectName}`);
-        } else if (action === 'update') {
-          console.log(`Project updated: ${projectName}`);
-        }
-        break;
-      }
-
-      case 'Cycle': {
-        const cycleName = data.name || `Cycle ${data.number}`;
-
-        if (action === 'create') {
-          console.log(`New cycle created: ${cycleName}`);
-        }
-        break;
-      }
-
-      default:
-        console.log(`Unhandled webhook type: ${type}`);
     }
 
     return c.json({ success: true }, 200);
   } catch (error) {
     console.error('Linear webhook error:', error);
+    return c.json({ error: 'Internal error' }, 500);
+  }
+});
+
+// Notion Webhook
+function verifyNotionSignature(
+  signature: string | undefined,
+  rawBody: string,
+  verificationToken: string
+): boolean {
+  if (!signature || !verificationToken) return false;
+
+  const computedSignature = `sha256=${crypto
+    .createHmac('sha256', verificationToken)
+    .update(rawBody)
+    .digest('hex')}`;
+
+  return crypto.timingSafeEqual(
+    Buffer.from(computedSignature),
+    Buffer.from(signature)
+  );
+}
+
+app.post('/webhooks/notion', async (c) => {
+  const rawBody = await c.req.text();
+  const payload = JSON.parse(rawBody);
+
+  // Handle verification token (initial setup)
+  if (payload.verification_token) {
+    console.log('Notion webhook verification token received');
+    // Store this token - user needs to save it via dashboard
+    console.log('NOTION_VERIFICATION_TOKEN:', payload.verification_token);
+    return c.json({ success: true }, 200);
+  }
+
+  const signature = c.req.header('x-notion-signature');
+
+  // Find users with Notion and verify against their stored token
+  const userIds = await findUsersWithProvider('notion');
+  let verifiedUserId: string | null = null;
+
+  for (const userId of userIds) {
+    const token = await getWebhookSecret(userId, 'notion');
+    if (token && verifyNotionSignature(signature, rawBody, token)) {
+      verifiedUserId = userId;
+      break;
+    }
+  }
+
+  if (!verifiedUserId) {
+    // Try with global secret as fallback
+    const globalSecret = process.env.NOTION_WEBHOOK_SECRET;
+    if (globalSecret && verifyNotionSignature(signature, rawBody, globalSecret)) {
+      verifiedUserId = 'all';
+    } else {
+      console.error('Notion webhook: Invalid signature');
+      return c.json({ error: 'Invalid signature' }, 401);
+    }
+  }
+
+  const eventType = payload.type;
+  console.log(`Notion webhook: ${eventType}`, { entity: payload.entity?.id });
+
+  try {
+    const notification = formatNotionNotification(eventType, payload);
+
+    if (notification) {
+      if (verifiedUserId === 'all') {
+        for (const userId of userIds) {
+          const result = await sendNotification(userId, notification);
+          console.log(`Notification sent to ${userId}:`, result);
+        }
+      } else {
+        const result = await sendNotification(verifiedUserId, notification);
+        console.log(`Notification sent to ${verifiedUserId}:`, result);
+      }
+    }
+
+    return c.json({ success: true }, 200);
+  } catch (error) {
+    console.error('Notion webhook error:', error);
     return c.json({ error: 'Internal error' }, 500);
   }
 });
