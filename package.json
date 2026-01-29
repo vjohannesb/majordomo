@@ -12,7 +12,10 @@
     "start": "tsx src/cli.ts",
     "debug": "tsx src/cli.ts --debug",
     "dev": "tsx watch src/cli.ts",
-    "build": "tsc"
+    "build": "tsc",
+    "mcp": "tsx src/mcp/server.ts",
+    "mcp:dev": "tsx watch src/mcp/server.ts",
+    "mcp:stdio": "tsx src/mcp/server.ts --stdio"
   },
   "keywords": [
     "ai",
@@ -32,13 +35,17 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.71.2",
     "@clack/prompts": "^1.0.0",
+    "@hono/node-server": "^1.19.9",
     "@linear/sdk": "^72.0.0",
+    "@modelcontextprotocol/sdk": "^1.25.3",
     "@notionhq/client": "^5.8.0",
     "@slack/web-api": "^7.13.0",
     "better-sqlite3": "^12.6.2",
     "discord.js": "^14.25.1",
     "dotenv": "^17.2.3",
     "googleapis": "^170.1.0",
-    "jira-client": "^8.2.2"
+    "hono": "^4.11.7",
+    "jira-client": "^8.2.2",
+    "postgres": "^3.4.8"
   }
 }
