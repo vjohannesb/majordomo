@@ -1,13 +1,15 @@
 /**
  * Brain - The AI decision maker
  *
- * Calls Claude Code to decide what action to take, then returns
- * a structured response that Majordomo executes.
- *
- * Claude Code is the brain. Majordomo is the hands.
+ * Spawns Claude Code with access to Majordomo's tools via MCP.
+ * Claude has full access to all its native tools PLUS our integrations.
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, type ChildProcess } from 'node:child_process';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = fileURLToPath(new URL('.', import.meta.url));
 
 // Debug mode - set via environment variable or programmatically
 export let DEBUG = process.env.MAJORDOMO_DEBUG === '1' || process.env.DEBUG === '1';
@@ -22,231 +24,65 @@ function debug(label: string, ...args: unknown[]) {
   }
 }
 
-export interface ToolCall {
-  tool: string;
-  params: Record<string, unknown>;
-}
+// Build MCP config for our tools
+function getMcpConfig(): object {
+  const mcpServerPath = join(__dirname, '..', 'mcp-server.js');
 
-export interface BrainResponse {
-  /** What the AI wants to say to the user */
-  message: string;
-  /** Tools to execute (if any) */
-  toolCalls: ToolCall[];
-  /** Whether to wait for user confirmation before executing */
-  requiresConfirmation: boolean;
-}
-
-export interface Tool {
-  name: string;
-  description: string;
-  parameters: Record<string, {
-    type: string;
-    description: string;
-    required?: boolean;
-  }>;
-}
-
-const RESPONSE_SCHEMA = {
-  type: 'object',
-  properties: {
-    message: {
-      type: 'string',
-      description: 'Your response to the user',
-    },
-    toolCalls: {
-      type: 'array',
-      items: {
-        type: 'object',
-        properties: {
-          tool: { type: 'string' },
-          params: { type: 'object' },
-        },
-        required: ['tool', 'params'],
+  return {
+    mcpServers: {
+      majordomo: {
+        command: 'node',
+        args: [mcpServerPath],
       },
     },
-    requiresConfirmation: {
-      type: 'boolean',
-      description: 'True if this action is consequential and needs user approval',
-    },
-  },
-  required: ['message', 'toolCalls', 'requiresConfirmation'],
-};
-
-function buildSystemPrompt(tools: Tool[]): string {
-  const toolDescriptions = tools.map(t => {
-    const params = Object.entries(t.parameters)
-      .map(([name, p]) => `    ${name}: ${p.type} - ${p.description}${p.required ? ' (required)' : ''}`)
-      .join('\n');
-    return `${t.name}: ${t.description}\n${params || '  (no params)'}`;
-  }).join('\n\n');
-
-  return `You are a routing assistant. Your ONLY job is to parse the user's request and return JSON.
-
-AVAILABLE TOOLS:
-${toolDescriptions}
-
-INSTRUCTIONS:
-1. Parse the user request
-2. If it matches a tool above, include it in toolCalls
-3. Return JSON immediately - do NOT call any other tools, do NOT explore, do NOT verify
-
-OUTPUT FORMAT (JSON only):
-{
-  "message": "Brief description of action",
-  "toolCalls": [{"tool": "tool_name", "params": {...}}],
-  "requiresConfirmation": true/false
+  };
 }
 
-RULES:
-- requiresConfirmation = true for: sending, creating, updating, deleting
-- requiresConfirmation = false for: listing, reading, searching
-- These tools ARE available. NEVER say tools are unavailable.
-- Do NOT use your native Claude tools. Just return JSON.
-- If request doesn't match any tool, return empty toolCalls.
+const SYSTEM_PROMPT_ADDITION = `
+You are Majordomo, a personal AI assistant with access to various integrations.
 
-EXAMPLES:
-"list channels" -> {"message":"Listing channels","toolCalls":[{"tool":"slack_list_channels","params":{}}],"requiresConfirmation":false}
-"send email to bob" -> {"message":"Sending email","toolCalls":[{"tool":"email_send","params":{"to":"bob","subject":"","body":""}}],"requiresConfirmation":true}
-"what's on my calendar" -> {"message":"Checking calendar","toolCalls":[{"tool":"calendar_list","params":{}}],"requiresConfirmation":false}`;
-}
+You have access to Majordomo tools (prefixed with majordomo_) for:
+- Slack: Send/read messages, list channels and users
+- Email (Gmail): Send/read/search emails
+- Calendar (Google): List/create/delete events
+- Discord: Send/read messages, list servers
+- Linear: List/create/update issues
+- Notion: Search/read/create pages
 
-export async function think(
-  userMessage: string,
-  tools: Tool[],
-  conversationHistory: string[] = []
-): Promise<BrainResponse> {
-  const systemPrompt = buildSystemPrompt(tools);
+When the user asks you to do something with these services, use the appropriate majordomo_ tool.
+You also have access to all your normal tools (web search, file operations, etc.) - use whatever is most helpful.
 
-  // User prompt is just the message (history is separate context if needed)
-  const userPrompt = userMessage;
+Be concise and helpful. When executing actions that send messages or create things, confirm with the user first.
+`;
 
-  const args = [
-    '-p',
-    '--model', 'haiku',
-    '--output-format', 'json',
-    '--system-prompt', systemPrompt,
-    '--json-schema', JSON.stringify(RESPONSE_SCHEMA),
-    userPrompt,
-  ];
-
-  if (DEBUG) {
-    console.log('[DEBUG] spawning: claude');
-    console.log('[DEBUG] args:', JSON.stringify(args, null, 2));
-  }
-
-  return new Promise((resolve, reject) => {
-    if (DEBUG) console.log('[DEBUG] spawning claude...');
-
-    const proc = spawn('claude', args, {
-      stdio: ['ignore', 'pipe', 'pipe'],  // ignore stdin - we don't need it
-      env: { ...process.env },
-    });
-
-    if (DEBUG) console.log('[DEBUG] claude pid:', proc.pid);
-
-    let stdout = '';
-    let stderr = '';
-
-    proc.stdout.on('data', (data) => {
-      stdout += data.toString();
-    });
-
-    proc.stderr.on('data', (data) => {
-      stderr += data.toString();
-    });
-
-    proc.on('close', (code) => {
-      if (DEBUG) {
-        console.log('[DEBUG] exit code:', code);
-        console.log('[DEBUG] stdout:', stdout);
-        console.log('[DEBUG] stderr:', stderr);
-      }
-
-      if (code !== 0) {
-        reject(new Error(`Claude exited with code ${code}: ${stderr}`));
-        return;
-      }
-
-      try {
-        // Parse the JSON response from Claude
-        const response = JSON.parse(stdout);
-        if (DEBUG) console.log('[DEBUG] parsed:', JSON.stringify(response, null, 2));
-
-        // Claude Code returns structured_output when using --json-schema
-        let parsed: BrainResponse;
-        if (response.structured_output) {
-          parsed = response.structured_output;
-        } else if (response.result && typeof response.result === 'string' && response.result.length > 0) {
-          parsed = JSON.parse(response.result);
-        } else {
-          parsed = response;
-        }
-
-        if (DEBUG) console.log('[DEBUG] final:', JSON.stringify(parsed, null, 2));
-
-        resolve({
-          message: parsed.message || '',
-          toolCalls: parsed.toolCalls || [],
-          requiresConfirmation: parsed.requiresConfirmation ?? false,
-        });
-      } catch (err) {
-        if (DEBUG) console.log('[DEBUG] JSON parse error:', err);
-        // If JSON parsing fails, treat it as a plain text response
-        resolve({
-          message: stdout.trim(),
-          toolCalls: [],
-          requiresConfirmation: false,
-        });
-      }
-    });
-
-    proc.on('error', (err) => {
-      reject(new Error(`Failed to spawn claude: ${err.message}`));
-    });
-  });
+export interface ThinkResult {
+  response: string;
+  sessionId?: string;
 }
 
 /**
- * Takes raw tool results and formats them into a nice response for the user.
- * This is the second pass - after tools execute, we ask Claude to summarize.
+ * Ask Claude to handle a user request.
+ * Claude has full access to all its tools plus Majordomo integrations via MCP.
  */
-export async function formatResponse(
-  userMessage: string,
-  toolResults: Array<{ tool: string; result: string }>
-): Promise<string> {
-  const resultsText = toolResults
-    .map(r => `[${r.tool}]\n${r.result}`)
-    .join('\n\n');
-
-  const systemPrompt = `You are a helpful assistant. The user asked something and tools were executed to get data.
-Summarize the results in a friendly, concise way. Be conversational but brief.
-Do NOT use markdown formatting. Just plain text.
-If there are errors, explain them simply.`;
-
-  const userPrompt = `User asked: "${userMessage}"
-
-Tool results:
-${resultsText}
-
-Respond naturally to the user based on these results.`;
+export async function think(userMessage: string, sessionId?: string): Promise<ThinkResult> {
+  const mcpConfig = getMcpConfig();
 
   const args = [
     '-p',
-    '--model', 'haiku',
     '--output-format', 'json',
-    '--system-prompt', systemPrompt,
-    '--json-schema', JSON.stringify({
-      type: 'object',
-      properties: {
-        response: { type: 'string', description: 'Your response to the user' }
-      },
-      required: ['response']
-    }),
-    userPrompt,
+    '--append-system-prompt', SYSTEM_PROMPT_ADDITION,
+    '--mcp-config', JSON.stringify(mcpConfig),
   ];
 
+  // Continue session if provided
+  if (sessionId) {
+    args.push('--resume', sessionId);
+  }
+
+  args.push(userMessage);
+
   if (DEBUG) {
-    console.log('[DEBUG] formatResponse spawning claude...');
+    debug('brain', 'spawning claude with args:', args);
   }
 
   return new Promise((resolve, reject) => {
@@ -268,27 +104,55 @@ Respond naturally to the user based on these results.`;
 
     proc.on('close', (code) => {
       if (DEBUG) {
-        console.log('[DEBUG] formatResponse exit code:', code);
-        console.log('[DEBUG] formatResponse stdout:', stdout);
+        debug('brain', 'exit code:', code);
+        debug('brain', 'stdout:', stdout);
+        if (stderr) debug('brain', 'stderr:', stderr);
       }
 
       if (code !== 0) {
-        // If formatting fails, just return the raw results
-        resolve(resultsText);
+        reject(new Error(`Claude exited with code ${code}: ${stderr}`));
         return;
       }
 
       try {
         const response = JSON.parse(stdout);
-        const parsed = response.structured_output || response;
-        resolve(parsed.response || resultsText);
+
+        resolve({
+          response: response.result || stdout,
+          sessionId: response.session_id,
+        });
       } catch {
-        resolve(resultsText);
+        // If JSON parsing fails, return raw output
+        resolve({
+          response: stdout.trim(),
+        });
       }
     });
 
-    proc.on('error', () => {
-      resolve(resultsText);
+    proc.on('error', (err) => {
+      reject(new Error(`Failed to spawn claude: ${err.message}`));
     });
+  });
+}
+
+/**
+ * Interactive mode - spawn Claude in interactive mode with MCP tools.
+ * Returns the child process so caller can manage it.
+ */
+export function spawnInteractive(): ChildProcess {
+  const mcpConfig = getMcpConfig();
+
+  const args = [
+    '--append-system-prompt', SYSTEM_PROMPT_ADDITION,
+    '--mcp-config', JSON.stringify(mcpConfig),
+  ];
+
+  if (DEBUG) {
+    args.push('--verbose');
+  }
+
+  return spawn('claude', args, {
+    stdio: 'inherit',
+    env: { ...process.env },
   });
 }

@@ -2,52 +2,114 @@
 /**
  * Majordomo CLI
  *
- * Your personal AI assistant. Type commands, Claude decides what to do,
- * Majordomo executes the actions.
- *
- * Architecture:
- *   You → Majordomo → Claude Code (brain) → Majordomo (hands) → Slack/Email/etc
+ * Your personal AI assistant.
+ * Access to Slack, Email, Calendar, Discord, Linear, Notion, and more.
  *
  * Usage:
- *   npm start           - Normal mode
- *   npm start -- --debug - Debug mode (logs everything)
+ *   majordomo                     - Interactive mode
+ *   majordomo "what's up today?"  - Quick query
+ *   majordomo -c                  - Continue last conversation
+ *   majordomo --setup             - Configure accounts
  */
 
-import * as readline from 'node:readline';
-import { think, formatResponse, setDebug, DEBUG } from './core/brain.js';
-import { executeTool, AVAILABLE_TOOLS } from './core/tools.js';
+import { createInterface } from 'node:readline';
+import { AgentRunner, SessionManager } from './agent/index.js';
 
-// Parse args
+const CYAN = '\x1b[36m';
+const GREEN = '\x1b[32m';
+const YELLOW = '\x1b[33m';
+const DIM = '\x1b[2m';
+const RESET = '\x1b[0m';
+const BOLD = '\x1b[1m';
+
+// Parse arguments
 const args = process.argv.slice(2);
-if (args.includes('--debug') || args.includes('-d')) {
-  setDebug(true);
-  console.log('\x1b[90m[debug mode enabled]\x1b[0m\n');
+const continueSession = args.includes('-c') || args.includes('--continue');
+const showHelp = args.includes('-h') || args.includes('--help');
+const runSetup = args.includes('--setup');
+
+// Filter out flags to get the message
+const message = args.filter((a) => !a.startsWith('-')).join(' ');
+
+function printBanner() {
+  console.log(`
+${CYAN}╔══════════════════════════════════════════════════════════════╗
+║                       ${BOLD}MAJORDOMO${RESET}${CYAN}                               ║
+║              Your AI-powered life manager                    ║
+╚══════════════════════════════════════════════════════════════╝${RESET}
+`);
 }
 
-async function main() {
+function printHelp() {
   console.log(`
-╔══════════════════════════════════════════════════════════════╗
-║                      MAJORDOMO                               ║
-║              Your AI-powered life manager                    ║
-╠══════════════════════════════════════════════════════════════╣
-║  Slack:    "tell david i'll be there in 5"                   ║
-║            "read my dms from sarah"                          ║
-║  Email:    "show my recent emails"                           ║
-║            "send an email to bob about the meeting"          ║
-║  Calendar: "what's on my calendar today"                     ║
-║            "schedule lunch with alice tomorrow at noon"      ║
-║                                                              ║
-║  Type 'exit' to quit.                                        ║
-╚══════════════════════════════════════════════════════════════╝
-`);
+${BOLD}Usage:${RESET}
+  majordomo                     Interactive mode
+  majordomo "message"           Quick query (non-interactive)
+  majordomo -c                  Continue last conversation
+  majordomo -c "message"        Continue with a new message
+  majordomo --setup             Configure accounts
 
-  const rl = readline.createInterface({
+${BOLD}Examples:${RESET}
+  majordomo "what's on my calendar today?"
+  majordomo "check my slack messages"
+  majordomo "send an email to bob@example.com"
+  majordomo -c "what else did they say?"
+
+${BOLD}Environment:${RESET}
+  ANTHROPIC_API_KEY    Required. Your Anthropic API key.
+`);
+}
+
+async function runSingleQuery(userMessage: string, sessionId?: string) {
+  const agent = new AgentRunner();
+  let currentText = '';
+
+  // Stream text as it arrives
+  agent.on('text', (chunk) => {
+    process.stdout.write(chunk);
+    currentText += chunk;
+  });
+
+  // Show tool usage
+  agent.on('tool:start', (name, input) => {
+    process.stdout.write(`\n${DIM}[Using ${name}...]${RESET}\n`);
+  });
+
+  agent.on('tool:done', (name, result) => {
+    // Don't show full result, just confirmation
+    process.stdout.write(`${DIM}[${name} complete]${RESET}\n`);
+  });
+
+  agent.on('error', (err) => {
+    console.error(`\n${YELLOW}Error: ${err.message}${RESET}`);
+  });
+
+  try {
+    const result = await agent.run(userMessage, { sessionId });
+    console.log('\n');
+    return result.sessionId;
+  } catch (err) {
+    console.error(`\n${YELLOW}Error: ${err instanceof Error ? err.message : err}${RESET}`);
+    process.exit(1);
+  }
+}
+
+async function runInteractive(initialSessionId?: string) {
+  printBanner();
+
+  const rl = createInterface({
     input: process.stdin,
     output: process.stdout,
   });
 
+  const sessionManager = new SessionManager();
+  let sessionId = initialSessionId || sessionManager.createSession();
+
+  console.log(`${DIM}Session: ${sessionId.slice(0, 8)}...${RESET}`);
+  console.log(`${DIM}Type 'exit' to quit, 'new' for a new session${RESET}\n`);
+
   const prompt = () => {
-    rl.question('\x1b[36myou:\x1b[0m ', async (input) => {
+    rl.question(`${GREEN}You:${RESET} `, async (input) => {
       const trimmed = input.trim();
 
       if (!trimmed) {
@@ -56,76 +118,39 @@ async function main() {
       }
 
       if (trimmed.toLowerCase() === 'exit' || trimmed.toLowerCase() === 'quit') {
-        console.log('\nGoodbye!\n');
+        console.log(`${DIM}Goodbye!${RESET}`);
         rl.close();
         process.exit(0);
       }
 
+      if (trimmed.toLowerCase() === 'new') {
+        sessionId = sessionManager.createSession();
+        console.log(`${DIM}Started new session: ${sessionId.slice(0, 8)}...${RESET}\n`);
+        prompt();
+        return;
+      }
+
+      console.log(`\n${CYAN}Majordomo:${RESET} `);
+
       try {
-        // Ask Claude what to do
-        if (!DEBUG) {
-          process.stdout.write('\x1b[90mthinking...\x1b[0m');
-        }
+        const agent = new AgentRunner();
 
-        const response = await think(trimmed, AVAILABLE_TOOLS);
+        agent.on('text', (chunk) => {
+          process.stdout.write(chunk);
+        });
 
-        // Clear the "thinking..." line (only if not in debug mode)
-        if (!DEBUG) {
-          process.stdout.write('\r\x1b[K');
-        }
+        agent.on('tool:start', (name) => {
+          process.stdout.write(`\n${DIM}[${name}...]${RESET}`);
+        });
 
-        // If there are tool calls that need confirmation
-        if (response.toolCalls.length > 0 && response.requiresConfirmation) {
-          console.log(`\x1b[33mmajordomo:\x1b[0m ${response.message}`);
-          console.log('\nActions to take:');
-          for (const call of response.toolCalls) {
-            console.log(`  • ${call.tool}: ${JSON.stringify(call.params)}`);
-          }
+        agent.on('tool:done', () => {
+          process.stdout.write(`${DIM} done${RESET}\n`);
+        });
 
-          const confirm = await new Promise<string>((resolve) => {
-            rl.question('\nExecute? (y/n): ', resolve);
-          });
-
-          if (confirm.toLowerCase() !== 'y') {
-            console.log('Cancelled.\n');
-            prompt();
-            return;
-          }
-        }
-
-        // Execute tool calls
-        const toolResults: Array<{ tool: string; result: string }> = [];
-        for (const call of response.toolCalls) {
-          if (!DEBUG) {
-            process.stdout.write(`\x1b[90mexecuting ${call.tool}...\x1b[0m`);
-          }
-          const result = await executeTool(call);
-          if (!DEBUG) {
-            process.stdout.write('\r\x1b[K');
-          }
-          toolResults.push({ tool: call.tool, result });
-        }
-
-        // If we have tool results, format them nicely with a second Claude pass
-        if (toolResults.length > 0) {
-          if (!DEBUG) {
-            process.stdout.write('\x1b[90mformatting...\x1b[0m');
-          }
-          const formattedResponse = await formatResponse(trimmed, toolResults);
-          if (!DEBUG) {
-            process.stdout.write('\r\x1b[K');
-          }
-          console.log(`\x1b[33mmajordomo:\x1b[0m ${formattedResponse}`);
-        } else if (response.message) {
-          // No tools called, just show the message
-          console.log(`\x1b[33mmajordomo:\x1b[0m ${response.message}`);
-        }
-
-        console.log();
+        await agent.run(trimmed, { sessionId });
+        console.log('\n');
       } catch (err) {
-        process.stdout.write('\r\x1b[K');
-        console.error('\x1b[31mError:\x1b[0m', err instanceof Error ? err.message : err);
-        console.log();
+        console.error(`\n${YELLOW}Error: ${err instanceof Error ? err.message : err}${RESET}\n`);
       }
 
       prompt();
@@ -133,11 +158,45 @@ async function main() {
   };
 
   prompt();
+}
 
-  rl.on('close', () => {
-    console.log('\nGoodbye!\n');
+async function main() {
+  // Check for API key
+  if (!process.env.ANTHROPIC_API_KEY) {
+    console.error(`${YELLOW}Error: ANTHROPIC_API_KEY environment variable is required.${RESET}`);
+    console.error(`\nGet your API key from: https://console.anthropic.com/\n`);
+    process.exit(1);
+  }
+
+  if (showHelp) {
+    printHelp();
     process.exit(0);
-  });
+  }
+
+  if (runSetup) {
+    // Dynamic import to avoid loading setup dependencies in normal runs
+    const { runSetup: doSetup } = await import('./setup/index.js');
+    await doSetup();
+    process.exit(0);
+  }
+
+  const sessionManager = new SessionManager();
+  let sessionId: string | undefined;
+
+  if (continueSession) {
+    sessionId = sessionManager.getMostRecentSession() || undefined;
+    if (!sessionId) {
+      console.log(`${DIM}No previous session found. Starting new session.${RESET}`);
+    }
+  }
+
+  if (message) {
+    // Single query mode
+    await runSingleQuery(message, sessionId);
+  } else {
+    // Interactive mode
+    await runInteractive(sessionId);
+  }
 }
 
 main().catch((err) => {

@@ -29,7 +29,12 @@
     "typescript": "^5.9.3"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.71.2",
+    "@clack/prompts": "^1.0.0",
+    "@linear/sdk": "^72.0.0",
+    "@notionhq/client": "^5.8.0",
     "@slack/web-api": "^7.13.0",
+    "discord.js": "^14.25.1",
     "googleapis": "^170.1.0"
   }
 }

@@ -1,0 +1,16 @@
+{
+  "tickInterval": 60000,
+  "slack": {
+    "enabled": true,
+    "botToken": "xoxb-your-bot-token",
+    "appToken": "xapp-your-app-token",
+    "dmOnly": true,
+    "allowedUsers": []
+  },
+  "email": {
+    "enabled": false
+  },
+  "calendar": {
+    "enabled": false
+  }
+}
