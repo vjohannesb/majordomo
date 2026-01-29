@@ -72,8 +72,9 @@ ${BOLD}API Endpoints (when using --serve):${RESET}
   GET  /api/sessions/:id  Get session details
   GET  /health            Health check
 
-${BOLD}Environment:${RESET}
-  ANTHROPIC_API_KEY    Required. Your Anthropic API key.
+${BOLD}Configuration:${RESET}
+  Run 'majordomo --setup' to configure your AI provider and integrations.
+  Supports: Anthropic, OpenAI, Ollama (local), Claude Code CLI
 `);
 }
 
@@ -178,13 +179,6 @@ async function runInteractive(initialSessionId?: string) {
 }
 
 async function main() {
-  // Check for API key
-  if (!process.env.ANTHROPIC_API_KEY) {
-    console.error(`${YELLOW}Error: ANTHROPIC_API_KEY environment variable is required.${RESET}`);
-    console.error(`\nGet your API key from: https://console.anthropic.com/\n`);
-    process.exit(1);
-  }
-
   if (showHelp) {
     printHelp();
     process.exit(0);
