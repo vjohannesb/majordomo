@@ -526,16 +526,16 @@ async function addNotionAccount(): Promise<NotionAccount | null> {
   p.note(
     `1. Go to: https://www.notion.so/my-integrations
 2. New integration -> Submit
-3. Copy Internal Integration Secret (secret_...)
+3. Copy Internal Integration Token (starts with ntn_ or secret_)
 4. Share pages with integration: ... -> Add connections`,
     'Create Notion Integration'
   );
 
   const integrationToken = await p.text({
-    message: 'Integration Token (secret_...)',
+    message: 'Integration Token (ntn_... or secret_...)',
     validate: (v) => {
       if (!v) return 'Required';
-      if (!v.startsWith('secret_')) return 'Should start with secret_';
+      if (!v.startsWith('ntn_') && !v.startsWith('secret_')) return 'Should start with ntn_ or secret_';
       return undefined;
     },
   });
