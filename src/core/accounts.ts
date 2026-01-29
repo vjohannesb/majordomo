@@ -20,12 +20,22 @@ import type {
   DiscordAccount,
   LinearAccount,
   NotionAccount,
+  JiraAccount,
   MajordomoConfig,
 } from '../config.js';
 
 // ============================================================================
 // Tool Context - passed to every tool execution
 // ============================================================================
+
+/** Simple Jira API client using fetch */
+export interface JiraClient {
+  host: string;
+  email: string;
+  apiToken: string;
+  /** Make a Jira API request */
+  request: <T = unknown>(method: string, path: string, body?: unknown) => Promise<T>;
+}
 
 export interface ToolContext {
   config: MajordomoConfig;
@@ -41,6 +51,8 @@ export interface ToolContext {
   getLinearClient: (accountName?: string) => Promise<LinearClient>;
   /** Get Notion client for a specific account (or default) */
   getNotionClient: (accountName?: string) => Promise<NotionClient>;
+  /** Get Jira client for a specific account (or default) */
+  getJiraClient: (accountName?: string) => Promise<JiraClient>;
 }
 
 // ============================================================================
@@ -77,6 +89,7 @@ export const googleResolver = createAccountResolver<GoogleAccount>();
 export const discordResolver = createAccountResolver<DiscordAccount>();
 export const linearResolver = createAccountResolver<LinearAccount>();
 export const notionResolver = createAccountResolver<NotionAccount>();
+export const jiraResolver = createAccountResolver<JiraAccount>();
 
 // ============================================================================
 // Client Managers - Cache clients per account
@@ -234,12 +247,64 @@ class NotionClientManager {
   }
 }
 
+class JiraClientManager {
+  private clients = new Map<string, JiraClient>();
+
+  get(account: JiraAccount): JiraClient {
+    const key = account.name;
+    if (!this.clients.has(key)) {
+      if (!account.host || !account.email || !account.apiToken) {
+        throw new Error(`Missing Jira credentials for account: ${account.name}`);
+      }
+
+      const authHeader = 'Basic ' + Buffer.from(`${account.email}:${account.apiToken}`).toString('base64');
+
+      const client: JiraClient = {
+        host: account.host,
+        email: account.email,
+        apiToken: account.apiToken,
+        async request<T = unknown>(method: string, path: string, body?: unknown): Promise<T> {
+          const url = `${account.host}/rest/api/3${path}`;
+          const response = await fetch(url, {
+            method,
+            headers: {
+              'Authorization': authHeader,
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            ...(body ? { body: JSON.stringify(body) } : {}),
+          });
+
+          if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Jira API error (${response.status}): ${errorText}`);
+          }
+
+          if (response.status === 204) {
+            return {} as T;
+          }
+
+          return response.json() as Promise<T>;
+        },
+      };
+
+      this.clients.set(key, client);
+    }
+    return this.clients.get(key)!;
+  }
+
+  clear() {
+    this.clients.clear();
+  }
+}
+
 // Global client managers
 const slackManager = new SlackClientManager();
 const googleManager = new GoogleClientManager();
 const discordManager = new DiscordClientManager();
 const linearManager = new LinearClientManager();
 const notionManager = new NotionClientManager();
+const jiraManager = new JiraClientManager();
 
 // ============================================================================
 // Create Tool Context
@@ -323,6 +388,18 @@ export async function createToolContext(): Promise<ToolContext> {
         throw new Error(`Notion account not found: ${accountName || 'default'}`);
       }
       return notionManager.get(account);
+    },
+
+    async getJiraClient(accountName?: string): Promise<JiraClient> {
+      const accounts = config.accounts?.jira || [];
+      if (accounts.length === 0) {
+        throw new Error('No Jira accounts configured. Run: npm run setup');
+      }
+      const account = jiraResolver.resolve(accounts, accountName);
+      if (!account) {
+        throw new Error(`Jira account not found: ${accountName || 'default'}`);
+      }
+      return jiraManager.get(account);
     },
   };
 }

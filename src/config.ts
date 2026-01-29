@@ -65,12 +65,24 @@ export interface NotionAccount {
   integrationToken?: string;
 }
 
+export interface JiraAccount {
+  name: string;
+  isDefault?: boolean;
+  /** Jira instance URL (e.g., https://company.atlassian.net) */
+  host: string;
+  /** Jira email */
+  email: string;
+  /** Jira API token */
+  apiToken: string;
+}
+
 export interface AccountsConfig {
   slack?: SlackAccount[];
   google?: GoogleAccount[];
   discord?: DiscordAccount[];
   linear?: LinearAccount[];
   notion?: NotionAccount[];
+  jira?: JiraAccount[];
 }
 
 // ============================================================================
@@ -296,6 +308,12 @@ export function printConfig(config: MajordomoConfig) {
     }
   }
 
+  if (redacted.accounts?.jira) {
+    for (const account of redacted.accounts.jira) {
+      if (account.apiToken) account.apiToken = '***';
+    }
+  }
+
   // Legacy fields
   if (redacted.slack?.botToken) {
     redacted.slack.botToken = redacted.slack.botToken.slice(0, 10) + '...';
@@ -318,6 +336,7 @@ export function getAccountNames(config: MajordomoConfig): {
   discord: string[];
   linear: string[];
   notion: string[];
+  jira: string[];
 } {
   return {
     slack: (config.accounts?.slack || []).map(a => a.name),
@@ -325,5 +344,6 @@ export function getAccountNames(config: MajordomoConfig): {
     discord: (config.accounts?.discord || []).map(a => a.name),
     linear: (config.accounts?.linear || []).map(a => a.name),
     notion: (config.accounts?.notion || []).map(a => a.name),
+    jira: (config.accounts?.jira || []).map(a => a.name),
   };
 }

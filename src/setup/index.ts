@@ -25,6 +25,7 @@ import type {
   DiscordAccount,
   LinearAccount,
   NotionAccount,
+  JiraAccount,
 } from '../config.js';
 
 // OAuth credentials - loaded from environment or config
@@ -541,6 +542,51 @@ async function addNotionAccount(): Promise<NotionAccount | null> {
   };
 }
 
+async function addJiraAccount(): Promise<JiraAccount | null> {
+  const name = await p.text({
+    message: 'Account name',
+    placeholder: 'e.g., work',
+    validate: (v) => !v || v.length === 0 ? 'Name is required' : undefined,
+  });
+  if (isCancel(name)) return null;
+
+  p.note(
+    `1. Go to: https://id.atlassian.com/manage-profile/security/api-tokens
+2. Create API token -> Copy the token
+3. Your Jira URL is like: https://yourcompany.atlassian.net`,
+    'Get Jira API Token'
+  );
+
+  const host = await p.text({
+    message: 'Jira URL (e.g., https://company.atlassian.net)',
+    validate: (v) => {
+      if (!v) return 'Required';
+      if (!v.startsWith('https://')) return 'Should start with https://';
+      return undefined;
+    },
+  });
+  if (isCancel(host)) return null;
+
+  const email = await p.text({
+    message: 'Jira email address',
+    validate: (v) => !v ? 'Required' : undefined,
+  });
+  if (isCancel(email)) return null;
+
+  const apiToken = await p.text({
+    message: 'API Token',
+    validate: (v) => !v ? 'Required' : undefined,
+  });
+  if (isCancel(apiToken)) return null;
+
+  return {
+    name: name as string,
+    host: host as string,
+    email: email as string,
+    apiToken: apiToken as string,
+  };
+}
+
 // ============================================================================
 // Account Management Menu
 // ============================================================================
@@ -659,6 +705,7 @@ export async function runSetup() {
     const discordCount = config.accounts.discord?.length || 0;
     const linearCount = config.accounts.linear?.length || 0;
     const notionCount = config.accounts.notion?.length || 0;
+    const jiraCount = config.accounts.jira?.length || 0;
 
     const choice = await p.select({
       message: 'Configure integrations',
@@ -687,6 +734,11 @@ export async function runSetup() {
           value: 'notion',
           label: 'Notion',
           hint: notionCount > 0 ? color.green(`${notionCount} account(s)`) : color.yellow('not configured'),
+        },
+        {
+          value: 'jira',
+          label: 'Jira',
+          hint: jiraCount > 0 ? color.green(`${jiraCount} account(s)`) : color.yellow('not configured'),
         },
         { value: 'save', label: color.green('Save and exit') },
         { value: 'quit', label: color.dim('Quit without saving') },
@@ -741,6 +793,15 @@ export async function runSetup() {
         );
         break;
 
+      case 'jira':
+        config.accounts.jira = await manageAccounts(
+          'Jira',
+          config.accounts.jira || [],
+          (a) => a.host,
+          addJiraAccount
+        );
+        break;
+
       case 'save': {
         const s = p.spinner();
         s.start('Saving configuration...');
@@ -758,10 +819,12 @@ export async function runSetup() {
 Dev mode:         ${color.cyan('npm run dev')}
 
 Example commands:
-  "list my channels on work slack"
-  "send email from personal to bob@example.com"
-  "list my discord servers"
-  "create linear issue Fix bug"
+  "what's up today?" (checks all your channels)
+  "list my slack messages"
+  "send email to bob@example.com"
+  "what's on my calendar?"
+  "my jira issues"
+  "create a linear issue for..."
   "search notion for meeting notes"`,
           'Setup Complete'
         );

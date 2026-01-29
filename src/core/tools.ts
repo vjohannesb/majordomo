@@ -293,6 +293,68 @@ export const AVAILABLE_TOOLS: Tool[] = [
       id: { type: 'string', description: 'Memory ID to delete', required: true },
     },
   },
+
+  // Jira tools
+  {
+    name: 'jira_search',
+    description: 'Search Jira issues using JQL (Jira Query Language)',
+    parameters: {
+      jql: { type: 'string', description: 'JQL query (e.g., "assignee = currentUser() AND status != Done")', required: true },
+      limit: { type: 'number', description: 'Max results (default 10)' },
+      account: { type: 'string', description: 'Account name (uses default if not specified)' },
+    },
+  },
+  {
+    name: 'jira_get_issue',
+    description: 'Get details of a specific Jira issue',
+    parameters: {
+      key: { type: 'string', description: 'Issue key (e.g., PROJ-123)', required: true },
+      account: { type: 'string', description: 'Account name (uses default if not specified)' },
+    },
+  },
+  {
+    name: 'jira_create_issue',
+    description: 'Create a new Jira issue',
+    parameters: {
+      project: { type: 'string', description: 'Project key (e.g., PROJ)', required: true },
+      summary: { type: 'string', description: 'Issue summary/title', required: true },
+      description: { type: 'string', description: 'Issue description' },
+      issueType: { type: 'string', description: 'Issue type (e.g., Task, Bug, Story). Default: Task' },
+      assignee: { type: 'string', description: 'Assignee account ID or email' },
+      priority: { type: 'string', description: 'Priority (e.g., High, Medium, Low)' },
+      account: { type: 'string', description: 'Account name (uses default if not specified)' },
+    },
+  },
+  {
+    name: 'jira_update_issue',
+    description: 'Update an existing Jira issue',
+    parameters: {
+      key: { type: 'string', description: 'Issue key (e.g., PROJ-123)', required: true },
+      summary: { type: 'string', description: 'New summary' },
+      description: { type: 'string', description: 'New description' },
+      status: { type: 'string', description: 'Transition to status (e.g., "In Progress", "Done")' },
+      assignee: { type: 'string', description: 'New assignee account ID or email' },
+      account: { type: 'string', description: 'Account name (uses default if not specified)' },
+    },
+  },
+  {
+    name: 'jira_add_comment',
+    description: 'Add a comment to a Jira issue',
+    parameters: {
+      key: { type: 'string', description: 'Issue key (e.g., PROJ-123)', required: true },
+      comment: { type: 'string', description: 'Comment text', required: true },
+      account: { type: 'string', description: 'Account name (uses default if not specified)' },
+    },
+  },
+  {
+    name: 'jira_my_issues',
+    description: 'Get issues assigned to you',
+    parameters: {
+      status: { type: 'string', description: 'Filter by status (e.g., "In Progress")' },
+      limit: { type: 'number', description: 'Max results (default 10)' },
+      account: { type: 'string', description: 'Account name (uses default if not specified)' },
+    },
+  },
 ];
 
 // ============================================================================
@@ -1341,6 +1403,238 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<str
 
         store.delete(match.id);
         return `Deleted memory: ${match.content.slice(0, 50)}...`;
+      }
+
+      // Jira tools
+      case 'jira_search': {
+        const jira = await ctx.getJiraClient(account);
+        const { jql, limit } = params as { jql: string; limit?: number };
+
+        interface JiraSearchResponse {
+          issues: Array<{
+            key: string;
+            fields: {
+              summary: string;
+              status: { name: string };
+              assignee?: { displayName: string };
+              priority?: { name: string };
+            };
+          }>;
+          total: number;
+        }
+
+        const result = await jira.request<JiraSearchResponse>('GET', `/search?jql=${encodeURIComponent(jql)}&maxResults=${limit || 10}`);
+
+        if (result.issues.length === 0) {
+          return 'No issues found.';
+        }
+
+        const formatted = result.issues.map(issue => {
+          const assignee = issue.fields.assignee?.displayName || 'Unassigned';
+          const priority = issue.fields.priority?.name || 'None';
+          return `- ${issue.key}: ${issue.fields.summary} [${issue.fields.status.name}] (${assignee}, ${priority})`;
+        }).join('\n');
+
+        return `Found ${result.total} issues:\n${formatted}`;
+      }
+
+      case 'jira_get_issue': {
+        const jira = await ctx.getJiraClient(account);
+        const { key } = params as { key: string };
+
+        interface JiraIssue {
+          key: string;
+          fields: {
+            summary: string;
+            description?: { content?: Array<{ content?: Array<{ text?: string }> }> } | string;
+            status: { name: string };
+            assignee?: { displayName: string; emailAddress: string };
+            reporter?: { displayName: string };
+            priority?: { name: string };
+            created: string;
+            updated: string;
+            issuetype: { name: string };
+            project: { key: string; name: string };
+          };
+        }
+
+        const issue = await jira.request<JiraIssue>('GET', `/issue/${key}`);
+
+        // Parse description (can be ADF or plain text)
+        let description = 'No description';
+        if (issue.fields.description) {
+          if (typeof issue.fields.description === 'string') {
+            description = issue.fields.description;
+          } else if (issue.fields.description.content) {
+            description = issue.fields.description.content
+              .map(block => block.content?.map(c => c.text).join('') || '')
+              .join('\n');
+          }
+        }
+
+        return `
+Issue: ${issue.key}
+Summary: ${issue.fields.summary}
+Type: ${issue.fields.issuetype.name}
+Status: ${issue.fields.status.name}
+Priority: ${issue.fields.priority?.name || 'None'}
+Project: ${issue.fields.project.name} (${issue.fields.project.key})
+Assignee: ${issue.fields.assignee?.displayName || 'Unassigned'}
+Reporter: ${issue.fields.reporter?.displayName || 'Unknown'}
+Created: ${new Date(issue.fields.created).toLocaleString()}
+Updated: ${new Date(issue.fields.updated).toLocaleString()}
+
+Description:
+${description.slice(0, 500)}${description.length > 500 ? '...' : ''}
+`.trim();
+      }
+
+      case 'jira_create_issue': {
+        const jira = await ctx.getJiraClient(account);
+        const { project, summary, description, issueType, assignee, priority } = params as {
+          project: string;
+          summary: string;
+          description?: string;
+          issueType?: string;
+          assignee?: string;
+          priority?: string;
+        };
+
+        interface CreateIssueResponse {
+          key: string;
+          id: string;
+        }
+
+        const fields: Record<string, unknown> = {
+          project: { key: project },
+          summary,
+          issuetype: { name: issueType || 'Task' },
+        };
+
+        if (description) {
+          fields.description = {
+            type: 'doc',
+            version: 1,
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: description }] }],
+          };
+        }
+
+        if (assignee) {
+          fields.assignee = { id: assignee };
+        }
+
+        if (priority) {
+          fields.priority = { name: priority };
+        }
+
+        const result = await jira.request<CreateIssueResponse>('POST', '/issue', { fields });
+
+        return `Created issue: ${result.key} - ${summary}`;
+      }
+
+      case 'jira_update_issue': {
+        const jira = await ctx.getJiraClient(account);
+        const { key, summary, description, status, assignee } = params as {
+          key: string;
+          summary?: string;
+          description?: string;
+          status?: string;
+          assignee?: string;
+        };
+
+        const fields: Record<string, unknown> = {};
+
+        if (summary) {
+          fields.summary = summary;
+        }
+
+        if (description) {
+          fields.description = {
+            type: 'doc',
+            version: 1,
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: description }] }],
+          };
+        }
+
+        if (assignee) {
+          fields.assignee = { id: assignee };
+        }
+
+        // Update fields if any
+        if (Object.keys(fields).length > 0) {
+          await jira.request('PUT', `/issue/${key}`, { fields });
+        }
+
+        // Handle status transition separately
+        if (status) {
+          interface TransitionsResponse {
+            transitions: Array<{ id: string; name: string }>;
+          }
+
+          const transitions = await jira.request<TransitionsResponse>('GET', `/issue/${key}/transitions`);
+          const transition = transitions.transitions.find(t => t.name.toLowerCase() === status.toLowerCase());
+
+          if (transition) {
+            await jira.request('POST', `/issue/${key}/transitions`, { transition: { id: transition.id } });
+          } else {
+            const available = transitions.transitions.map(t => t.name).join(', ');
+            return `Updated issue ${key}, but could not transition to "${status}". Available: ${available}`;
+          }
+        }
+
+        return `Updated issue: ${key}`;
+      }
+
+      case 'jira_add_comment': {
+        const jira = await ctx.getJiraClient(account);
+        const { key, comment } = params as { key: string; comment: string };
+
+        await jira.request('POST', `/issue/${key}/comment`, {
+          body: {
+            type: 'doc',
+            version: 1,
+            content: [{ type: 'paragraph', content: [{ type: 'text', text: comment }] }],
+          },
+        });
+
+        return `Added comment to ${key}`;
+      }
+
+      case 'jira_my_issues': {
+        const jira = await ctx.getJiraClient(account);
+        const { status, limit } = params as { status?: string; limit?: number };
+
+        let jql = 'assignee = currentUser()';
+        if (status) {
+          jql += ` AND status = "${status}"`;
+        }
+        jql += ' ORDER BY updated DESC';
+
+        interface JiraSearchResponse {
+          issues: Array<{
+            key: string;
+            fields: {
+              summary: string;
+              status: { name: string };
+              priority?: { name: string };
+              updated: string;
+            };
+          }>;
+          total: number;
+        }
+
+        const result = await jira.request<JiraSearchResponse>('GET', `/search?jql=${encodeURIComponent(jql)}&maxResults=${limit || 10}`);
+
+        if (result.issues.length === 0) {
+          return 'No issues assigned to you.';
+        }
+
+        const formatted = result.issues.map(issue => {
+          const updated = new Date(issue.fields.updated).toLocaleDateString();
+          return `- ${issue.key}: ${issue.fields.summary} [${issue.fields.status.name}] (updated ${updated})`;
+        }).join('\n');
+
+        return `Your issues (${result.total} total):\n${formatted}`;
       }
 
       default:
