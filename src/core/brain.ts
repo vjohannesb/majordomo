@@ -205,3 +205,90 @@ export async function think(
     });
   });
 }
+
+/**
+ * Takes raw tool results and formats them into a nice response for the user.
+ * This is the second pass - after tools execute, we ask Claude to summarize.
+ */
+export async function formatResponse(
+  userMessage: string,
+  toolResults: Array<{ tool: string; result: string }>
+): Promise<string> {
+  const resultsText = toolResults
+    .map(r => `[${r.tool}]\n${r.result}`)
+    .join('\n\n');
+
+  const systemPrompt = `You are a helpful assistant. The user asked something and tools were executed to get data.
+Summarize the results in a friendly, concise way. Be conversational but brief.
+Do NOT use markdown formatting. Just plain text.
+If there are errors, explain them simply.`;
+
+  const userPrompt = `User asked: "${userMessage}"
+
+Tool results:
+${resultsText}
+
+Respond naturally to the user based on these results.`;
+
+  const args = [
+    '-p',
+    '--model', 'haiku',
+    '--output-format', 'json',
+    '--system-prompt', systemPrompt,
+    '--json-schema', JSON.stringify({
+      type: 'object',
+      properties: {
+        response: { type: 'string', description: 'Your response to the user' }
+      },
+      required: ['response']
+    }),
+    userPrompt,
+  ];
+
+  if (DEBUG) {
+    console.log('[DEBUG] formatResponse spawning claude...');
+  }
+
+  return new Promise((resolve, reject) => {
+    const proc = spawn('claude', args, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env },
+    });
+
+    let stdout = '';
+    let stderr = '';
+
+    proc.stdout.on('data', (data) => {
+      stdout += data.toString();
+    });
+
+    proc.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    proc.on('close', (code) => {
+      if (DEBUG) {
+        console.log('[DEBUG] formatResponse exit code:', code);
+        console.log('[DEBUG] formatResponse stdout:', stdout);
+      }
+
+      if (code !== 0) {
+        // If formatting fails, just return the raw results
+        resolve(resultsText);
+        return;
+      }
+
+      try {
+        const response = JSON.parse(stdout);
+        const parsed = response.structured_output || response;
+        resolve(parsed.response || resultsText);
+      } catch {
+        resolve(resultsText);
+      }
+    });
+
+    proc.on('error', () => {
+      resolve(resultsText);
+    });
+  });
+}

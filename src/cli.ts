@@ -14,7 +14,7 @@
  */
 
 import * as readline from 'node:readline';
-import { think, setDebug, DEBUG } from './core/brain.js';
+import { think, formatResponse, setDebug, DEBUG } from './core/brain.js';
 import { executeTool, AVAILABLE_TOOLS } from './core/tools.js';
 
 // Parse args
@@ -94,22 +94,31 @@ async function main() {
         }
 
         // Execute tool calls
-        const results: string[] = [];
+        const toolResults: Array<{ tool: string; result: string }> = [];
         for (const call of response.toolCalls) {
-          process.stdout.write(`\x1b[90mexecuting ${call.tool}...\x1b[0m`);
+          if (!DEBUG) {
+            process.stdout.write(`\x1b[90mexecuting ${call.tool}...\x1b[0m`);
+          }
           const result = await executeTool(call);
-          process.stdout.write('\r\x1b[K');
-          results.push(`${call.tool}: ${result}`);
+          if (!DEBUG) {
+            process.stdout.write('\r\x1b[K');
+          }
+          toolResults.push({ tool: call.tool, result });
         }
 
-        // Print response
-        if (response.message) {
+        // If we have tool results, format them nicely with a second Claude pass
+        if (toolResults.length > 0) {
+          if (!DEBUG) {
+            process.stdout.write('\x1b[90mformatting...\x1b[0m');
+          }
+          const formattedResponse = await formatResponse(trimmed, toolResults);
+          if (!DEBUG) {
+            process.stdout.write('\r\x1b[K');
+          }
+          console.log(`\x1b[33mmajordomo:\x1b[0m ${formattedResponse}`);
+        } else if (response.message) {
+          // No tools called, just show the message
           console.log(`\x1b[33mmajordomo:\x1b[0m ${response.message}`);
-        }
-
-        // Print execution results
-        if (results.length > 0) {
-          console.log('\x1b[32m' + results.join('\n') + '\x1b[0m');
         }
 
         console.log();
