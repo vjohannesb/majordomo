@@ -145,8 +145,8 @@ async function doSlackOAuth(): Promise<OAuthTokens> {
       // Build OAuth URL
       const oauthUrl = new URL('https://slack.com/oauth/v2/authorize');
       oauthUrl.searchParams.set('client_id', SLACK_CLIENT_ID);
-      oauthUrl.searchParams.set('scope', 'chat:write,users:read,channels:read,im:read');
-      oauthUrl.searchParams.set('user_scope', 'chat:write,users:read,channels:read,groups:read,im:read,im:write,im:history,mpim:read');
+      oauthUrl.searchParams.set('scope', 'chat:write,users:read,channels:read,channels:history,im:read');
+      oauthUrl.searchParams.set('user_scope', 'chat:write,users:read,channels:read,channels:history,groups:read,groups:history,im:read,im:write,im:history,mpim:read');
       oauthUrl.searchParams.set('redirect_uri', REDIRECT_URI);
 
       console.log('Opening browser for Slack authorization...\n');
