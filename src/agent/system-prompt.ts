@@ -10,6 +10,7 @@
 
 import { loadConfig, type MajordomoConfig } from '../config.js';
 import { AVAILABLE_TOOLS } from '../core/tools.js';
+import { getMemoryStore } from '../memory/store.js';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
@@ -107,7 +108,14 @@ ${memories}
 
 6. **Respect privacy**: Don't share sensitive information from one service with another unless the user explicitly asks.
 
-7. **Use memory tools**: When you learn important things about the user (preferences, important people, recurring tasks), use \`memory_remember\` to store them. Before answering questions about the user's past or preferences, use \`memory_search\` to check what you know.
+7. **Use memory proactively**:
+   - **Remember** (use \`memory_remember\`): When the user tells you their preferences, important contacts, work context, or anything they'd want you to remember long-term
+   - **Search** (use \`memory_search\`): Before answering questions about the user's preferences, past decisions, or people they've mentioned
+   - **Types**: Use "fact" for preferences/info, "note" for misc, "task" for recurring reminders
+   - Examples of things to remember:
+     - "I prefer morning meetings" → remember as fact with tags: ["preference", "calendar"]
+     - "Bob is my manager" → remember as fact with tags: ["people", "work"]
+     - "Use TypeScript for new projects" → remember as fact with tags: ["preference", "coding"]
 `.trim());
 
   return sections.join('\n\n---\n\n');
@@ -172,42 +180,57 @@ function buildToolsSummary(): string {
 }
 
 function loadMemories(): string | null {
-  const memoriesFile = join(MEMORIES_DIR, 'user.md');
-  if (existsSync(memoriesFile)) {
-    return readFileSync(memoriesFile, 'utf-8').trim();
+  const sections: string[] = [];
+
+  // Load facts from MemoryStore
+  try {
+    const store = getMemoryStore();
+    const facts = store.listByType('fact');
+
+    if (facts.length > 0) {
+      const factsList = facts
+        .slice(0, 20) // Limit to avoid huge prompts
+        .map(f => {
+          const tags = f.tags.length > 0 ? ` [${f.tags.join(', ')}]` : '';
+          return `- ${f.content}${tags}`;
+        })
+        .join('\n');
+
+      sections.push(`## Remembered Facts\n\n${factsList}`);
+    }
+  } catch {
+    // MemoryStore not available
   }
 
-  // Create a starter memories file
-  const starterMemories = `
-# About the User
+  // Load user markdown file
+  const memoriesFile = join(MEMORIES_DIR, 'user.md');
+  if (existsSync(memoriesFile)) {
+    const userNotes = readFileSync(memoriesFile, 'utf-8').trim();
+    if (userNotes && !userNotes.includes('(Majordomo will learn')) {
+      // Only include if user has actually added content
+      sections.push(`## User Notes\n\n${userNotes}`);
+    }
+  } else {
+    // Create starter file
+    const starterMemories = `# About the User
 
-(Majordomo will learn about you as you interact. You can also edit this file directly.)
+(Edit this file to add permanent notes for Majordomo)
 
 ## Preferences
 
-- Preferred communication style: (e.g., concise, detailed)
-- Work hours: (e.g., 9am-6pm)
-- Timezone: (auto-detected, but can override)
-
 ## Important People
 
-(Majordomo will remember people you frequently interact with)
-
-## Recurring Tasks
-
-(Regular tasks or check-ins)
-
 ## Notes
-
-(Anything else Majordomo should know)
 `.trim();
 
-  try {
-    const { mkdirSync, writeFileSync } = require('node:fs');
-    mkdirSync(MEMORIES_DIR, { recursive: true });
-    writeFileSync(memoriesFile, starterMemories);
-    return starterMemories;
-  } catch {
-    return null;
+    try {
+      const { mkdirSync, writeFileSync } = require('node:fs');
+      mkdirSync(MEMORIES_DIR, { recursive: true });
+      writeFileSync(memoriesFile, starterMemories);
+    } catch {
+      // Ignore
+    }
   }
+
+  return sections.length > 0 ? sections.join('\n\n') : null;
 }
