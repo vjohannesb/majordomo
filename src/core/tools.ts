@@ -746,17 +746,37 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<str
         const subject = headers.find(h => h.name === 'Subject')?.value || '(no subject)';
         const date = headers.find(h => h.name === 'Date')?.value || '';
 
-        // Extract body
-        let body = '';
-        const payload = response.data.payload;
-        if (payload?.body?.data) {
-          body = Buffer.from(payload.body.data, 'base64').toString('utf-8');
-        } else if (payload?.parts) {
-          const textPart = payload.parts.find(p => p.mimeType === 'text/plain');
-          if (textPart?.body?.data) {
-            body = Buffer.from(textPart.body.data, 'base64').toString('utf-8');
+        // Recursively find text content in nested multipart structures
+        type GmailPart = { mimeType?: string; body?: { data?: string }; parts?: GmailPart[] };
+        function extractText(part: GmailPart | undefined): string {
+          if (!part) return '';
+
+          // Direct body data
+          if (part.body?.data) {
+            if (part.mimeType === 'text/plain' || !part.mimeType) {
+              return Buffer.from(part.body.data, 'base64').toString('utf-8');
+            }
           }
+
+          // Search nested parts (prefer text/plain over text/html)
+          if (part.parts) {
+            // First try to find text/plain
+            for (const p of part.parts) {
+              if (p.mimeType === 'text/plain' && p.body?.data) {
+                return Buffer.from(p.body.data, 'base64').toString('utf-8');
+              }
+            }
+            // Recursively search nested parts
+            for (const p of part.parts) {
+              const text = extractText(p);
+              if (text) return text;
+            }
+          }
+
+          return '';
         }
+
+        const body = extractText(response.data.payload as GmailPart);
 
         return `From: ${from}\nTo: ${to}\nSubject: ${subject}\nDate: ${date}\n\n${body}`;
       }

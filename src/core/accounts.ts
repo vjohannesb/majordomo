@@ -84,8 +84,31 @@ function createAccountResolver<T extends AccountType>(): AccountResolver<T> {
   };
 }
 
+// Special resolver for Google accounts that also matches by email
+function createGoogleAccountResolver(): AccountResolver<GoogleAccount> {
+  return {
+    getByName(accounts: GoogleAccount[], name: string): GoogleAccount | undefined {
+      const lowerName = name.toLowerCase();
+      // Try matching by name first
+      const byName = accounts.find(a => a.name.toLowerCase() === lowerName);
+      if (byName) return byName;
+      // Then try matching by email
+      return accounts.find(a => a.email?.toLowerCase() === lowerName);
+    },
+    getDefault(accounts: GoogleAccount[]): GoogleAccount | undefined {
+      return accounts.find(a => a.isDefault) || accounts[0];
+    },
+    resolve(accounts: GoogleAccount[], name?: string): GoogleAccount | undefined {
+      if (name) {
+        return this.getByName(accounts, name);
+      }
+      return this.getDefault(accounts);
+    },
+  };
+}
+
 export const slackResolver = createAccountResolver<SlackAccount>();
-export const googleResolver = createAccountResolver<GoogleAccount>();
+export const googleResolver = createGoogleAccountResolver();
 export const discordResolver = createAccountResolver<DiscordAccount>();
 export const linearResolver = createAccountResolver<LinearAccount>();
 export const notionResolver = createAccountResolver<NotionAccount>();
