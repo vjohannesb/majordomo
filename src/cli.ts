@@ -33,8 +33,12 @@ const continueSession = args.includes('-c') || args.includes('--continue');
 const showHelp = args.includes('-h') || args.includes('--help');
 const runSetup = args.includes('--setup');
 const runServe = args.includes('--serve');
+const debugMode = args.includes('--debug') || args.includes('-d');
 const portArg = args.find((a) => a.startsWith('--port='));
 const port = portArg ? parseInt(portArg.split('=')[1] || '3000') : 3000;
+
+// Debug colors
+const MAGENTA = '\x1b[35m';
 
 // Filter out flags to get the message
 const message = args.filter((a) => !a.startsWith('-')).join(' ');
@@ -79,8 +83,16 @@ ${BOLD}Configuration:${RESET}
 }
 
 async function runSingleQuery(userMessage: string, sessionId?: string) {
-  const agent = new AgentRunner();
+  const agent = new AgentRunner({ debug: debugMode });
   let currentText = '';
+
+  // Debug logging
+  if (debugMode) {
+    agent.on('debug', (event, data) => {
+      console.error(`\n${MAGENTA}[DEBUG ${event}]${RESET}`);
+      console.error(`${DIM}${JSON.stringify(data, null, 2)}${RESET}\n`);
+    });
+  }
 
   // Stream text as it arrives
   agent.on('text', (chunk) => {
@@ -91,11 +103,17 @@ async function runSingleQuery(userMessage: string, sessionId?: string) {
   // Show tool usage
   agent.on('tool:start', (name, input) => {
     process.stdout.write(`\n${DIM}[Using ${name}...]${RESET}\n`);
+    if (debugMode) {
+      console.error(`${MAGENTA}[DEBUG tool:input]${RESET} ${DIM}${JSON.stringify(input)}${RESET}`);
+    }
   });
 
   agent.on('tool:done', (name, result) => {
     // Don't show full result, just confirmation
     process.stdout.write(`${DIM}[${name} complete]${RESET}\n`);
+    if (debugMode) {
+      console.error(`${MAGENTA}[DEBUG tool:result]${RESET} ${DIM}${result.slice(0, 500)}${result.length > 500 ? '...' : ''}${RESET}`);
+    }
   });
 
   agent.on('error', (err) => {
@@ -123,6 +141,9 @@ async function runInteractive(initialSessionId?: string) {
   const sessionManager = new SessionManager();
   let sessionId = initialSessionId || sessionManager.createSession();
 
+  // Show provider info
+  const testAgent = new AgentRunner({ debug: false });
+  console.log(`${DIM}Provider: ${testAgent.providerName} (${testAgent.modelName})${RESET}`);
   console.log(`${DIM}Session: ${sessionId.slice(0, 8)}...${RESET}`);
   console.log(`${DIM}Type 'exit' to quit, 'new' for a new session${RESET}\n`);
 
@@ -151,18 +172,31 @@ async function runInteractive(initialSessionId?: string) {
       console.log(`\n${CYAN}Majordomo:${RESET} `);
 
       try {
-        const agent = new AgentRunner();
+        const agent = new AgentRunner({ debug: debugMode });
+
+        if (debugMode) {
+          agent.on('debug', (event, data) => {
+            console.error(`\n${MAGENTA}[DEBUG ${event}]${RESET}`);
+            console.error(`${DIM}${JSON.stringify(data, null, 2)}${RESET}\n`);
+          });
+        }
 
         agent.on('text', (chunk) => {
           process.stdout.write(chunk);
         });
 
-        agent.on('tool:start', (name) => {
+        agent.on('tool:start', (name, input) => {
           process.stdout.write(`\n${DIM}[${name}...]${RESET}`);
+          if (debugMode) {
+            console.error(`\n${MAGENTA}[DEBUG tool:input]${RESET} ${DIM}${JSON.stringify(input)}${RESET}`);
+          }
         });
 
-        agent.on('tool:done', () => {
+        agent.on('tool:done', (name, result) => {
           process.stdout.write(`${DIM} done${RESET}\n`);
+          if (debugMode) {
+            console.error(`${MAGENTA}[DEBUG tool:result]${RESET} ${DIM}${result.slice(0, 500)}${result.length > 500 ? '...' : ''}${RESET}`);
+          }
         });
 
         await agent.run(trimmed, { sessionId });

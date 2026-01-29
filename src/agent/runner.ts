@@ -33,6 +33,12 @@ export interface AgentEvents {
   'tool:done': (name: string, result: string) => void;
   'error': (error: Error) => void;
   'done': (response: AgentResponse) => void;
+  'debug': (event: string, data: unknown) => void;
+}
+
+export interface AgentRunnerOptions {
+  provider?: AIProvider | ProviderConfig;
+  debug?: boolean;
 }
 
 export interface AgentResponse {
@@ -74,22 +80,32 @@ export class AgentRunner extends EventEmitter {
   private provider: AIProvider;
   private sessionManager: SessionManager;
   private toolContext: ToolContext | null = null;
+  private debug: boolean;
 
-  constructor(providerOrConfig?: AIProvider | ProviderConfig) {
+  constructor(options: AgentRunnerOptions = {}) {
     super();
 
-    if (providerOrConfig && 'complete' in providerOrConfig) {
+    this.debug = options.debug ?? false;
+
+    if (options.provider && 'complete' in options.provider) {
       // It's an AIProvider instance
-      this.provider = providerOrConfig;
-    } else if (providerOrConfig) {
+      this.provider = options.provider;
+    } else if (options.provider) {
       // It's a ProviderConfig
-      this.provider = createProvider(providerOrConfig);
+      this.provider = createProvider(options.provider);
     } else {
       // Try to auto-detect from config or environment
       this.provider = this.initializeProvider();
     }
 
     this.sessionManager = new SessionManager();
+
+    if (this.debug) {
+      this.emit('debug', 'provider:init', {
+        provider: this.provider.name,
+        model: this.provider.model,
+      });
+    }
   }
 
   private initializeProvider(): AIProvider {
@@ -152,6 +168,14 @@ export class AgentRunner extends EventEmitter {
     const tools = convertToolsToProvider();
     const toolContext = await this.getToolContext();
 
+    if (this.debug) {
+      this.emit('debug', 'system:prompt', {
+        length: systemPrompt.length,
+        preview: systemPrompt.slice(0, 500) + '...',
+      });
+      this.emit('debug', 'tools:available', tools.map(t => t.name));
+    }
+
     let fullResponse = '';
     const toolsUsed: string[] = [];
     let turns = 0;
@@ -165,6 +189,14 @@ export class AgentRunner extends EventEmitter {
     while (turns < maxTurns) {
       turns++;
 
+      if (this.debug) {
+        this.emit('debug', 'turn:start', {
+          turn: turns,
+          messageCount: providerMessages.length,
+          lastMessage: providerMessages[providerMessages.length - 1],
+        });
+      }
+
       if (stream) {
         const result = await this.runStreamingTurn(
           systemPrompt,
@@ -175,6 +207,14 @@ export class AgentRunner extends EventEmitter {
 
         fullResponse = result.text;
         toolsUsed.push(...result.toolsUsed);
+
+        if (this.debug) {
+          this.emit('debug', 'turn:response', {
+            turn: turns,
+            textLength: result.text.length,
+            toolCalls: result.toolCalls.map(tc => ({ name: tc.name, id: tc.id })),
+          });
+        }
 
         // If no tool calls, we're done
         if (result.toolCalls.length === 0) {
