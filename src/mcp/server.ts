@@ -38,6 +38,8 @@ import {
   logout,
   generateApiKey,
   validateApiKey,
+  getSlackAuthUrl,
+  handleSlackCallback,
 } from './auth.js';
 import {
   listEmails,
@@ -57,6 +59,20 @@ import {
   createIssue as createLinearIssue,
   updateIssue as updateLinearIssue,
 } from './services/linear.js';
+import {
+  searchNotion,
+  readNotionPage,
+  createNotionPage,
+  listNotionDatabases,
+  queryNotionDatabase,
+} from './services/notion.js';
+import {
+  listDiscordServers,
+  listDiscordChannels,
+  sendDiscordMessage,
+  readDiscordChannel,
+  sendDiscordDM,
+} from './services/discord.js';
 import {
   renderDashboard,
   renderApiKeySetup,
@@ -289,6 +305,131 @@ const TOOLS = [
       required: ['issueId'],
     },
   },
+  // Notion tools
+  {
+    name: 'notion_search',
+    description: 'Search Notion for pages and databases',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Search query' },
+        limit: { type: 'number', description: 'Max results (default 10)' },
+        account: { type: 'string', description: 'Workspace name' },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'notion_read_page',
+    description: 'Read a Notion page content',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        pageId: { type: 'string', description: 'Page ID' },
+        account: { type: 'string', description: 'Workspace name' },
+      },
+      required: ['pageId'],
+    },
+  },
+  {
+    name: 'notion_create_page',
+    description: 'Create a new Notion page',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Page title' },
+        parentId: { type: 'string', description: 'Parent page or database ID' },
+        content: { type: 'string', description: 'Page content (markdown-ish)' },
+        account: { type: 'string', description: 'Workspace name' },
+      },
+      required: ['title', 'parentId'],
+    },
+  },
+  {
+    name: 'notion_list_databases',
+    description: 'List Notion databases',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        account: { type: 'string', description: 'Workspace name' },
+      },
+    },
+  },
+  {
+    name: 'notion_query_database',
+    description: 'Query items from a Notion database',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        databaseId: { type: 'string', description: 'Database ID' },
+        limit: { type: 'number', description: 'Max results (default 20)' },
+        account: { type: 'string', description: 'Workspace name' },
+      },
+      required: ['databaseId'],
+    },
+  },
+  // Discord tools
+  {
+    name: 'discord_list_servers',
+    description: 'List Discord servers the bot is in',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        account: { type: 'string', description: 'Bot name' },
+      },
+    },
+  },
+  {
+    name: 'discord_list_channels',
+    description: 'List text channels in a Discord server',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        serverId: { type: 'string', description: 'Server ID' },
+        account: { type: 'string', description: 'Bot name' },
+      },
+      required: ['serverId'],
+    },
+  },
+  {
+    name: 'discord_send_message',
+    description: 'Send a message to a Discord channel',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        channelId: { type: 'string', description: 'Channel ID' },
+        content: { type: 'string', description: 'Message content' },
+        account: { type: 'string', description: 'Bot name' },
+      },
+      required: ['channelId', 'content'],
+    },
+  },
+  {
+    name: 'discord_read_channel',
+    description: 'Read recent messages from a Discord channel',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        channelId: { type: 'string', description: 'Channel ID' },
+        limit: { type: 'number', description: 'Max messages (default 20)' },
+        account: { type: 'string', description: 'Bot name' },
+      },
+      required: ['channelId'],
+    },
+  },
+  {
+    name: 'discord_send_dm',
+    description: 'Send a direct message to a Discord user',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        userId: { type: 'string', description: 'Discord user ID' },
+        content: { type: 'string', description: 'Message content' },
+        account: { type: 'string', description: 'Bot name' },
+      },
+      required: ['userId', 'content'],
+    },
+  },
 ];
 
 // ============================================================================
@@ -446,6 +587,63 @@ async function executeTool(
       return updateLinearIssue(userId, issueId, { title, description, stateId, priority, account });
     }
 
+    // Notion tools
+    case 'notion_search': {
+      const { query, limit, account } = args as { query: string; limit?: number; account?: string };
+      return searchNotion(userId, query, { limit, account });
+    }
+
+    case 'notion_read_page': {
+      const { pageId, account } = args as { pageId: string; account?: string };
+      return readNotionPage(userId, pageId, account);
+    }
+
+    case 'notion_create_page': {
+      const { title, parentId, content, account } = args as {
+        title: string;
+        parentId: string;
+        content?: string;
+        account?: string;
+      };
+      return createNotionPage(userId, title, { parentId, content, account });
+    }
+
+    case 'notion_list_databases': {
+      const { account } = args as { account?: string };
+      return listNotionDatabases(userId, account);
+    }
+
+    case 'notion_query_database': {
+      const { databaseId, limit, account } = args as { databaseId: string; limit?: number; account?: string };
+      return queryNotionDatabase(userId, databaseId, { limit, account });
+    }
+
+    // Discord tools
+    case 'discord_list_servers': {
+      const { account } = args as { account?: string };
+      return listDiscordServers(userId, account);
+    }
+
+    case 'discord_list_channels': {
+      const { serverId, account } = args as { serverId: string; account?: string };
+      return listDiscordChannels(userId, serverId, account);
+    }
+
+    case 'discord_send_message': {
+      const { channelId, content, account } = args as { channelId: string; content: string; account?: string };
+      return sendDiscordMessage(userId, channelId, content, account);
+    }
+
+    case 'discord_read_channel': {
+      const { channelId, limit, account } = args as { channelId: string; limit?: number; account?: string };
+      return readDiscordChannel(userId, channelId, { limit, account });
+    }
+
+    case 'discord_send_dm': {
+      const { userId: discordUserId, content, account } = args as { userId: string; content: string; account?: string };
+      return sendDiscordDM(userId, discordUserId, content, account);
+    }
+
     default:
       return `Unknown tool: ${toolName}`;
   }
@@ -512,6 +710,57 @@ app.get('/auth/callback', async (c) => {
 app.get('/auth/logout', (c) => {
   logout(c);
   return c.redirect('/');
+});
+
+// Slack OAuth
+app.get('/auth/slack', async (c) => {
+  const user = await getCurrentUser(c);
+  if (!user) {
+    return c.redirect('/auth/google');
+  }
+
+  try {
+    const url = getSlackAuthUrl(user.id);
+    return c.redirect(url);
+  } catch (error) {
+    return c.html(`
+      <html><body>
+        <h1>Slack OAuth Not Configured</h1>
+        <p>Set SLACK_CLIENT_ID and SLACK_CLIENT_SECRET environment variables.</p>
+        <p><a href="/dashboard">Back to Dashboard</a></p>
+      </body></html>
+    `);
+  }
+});
+
+app.get('/auth/slack/callback', async (c) => {
+  const code = c.req.query('code');
+  const state = c.req.query('state'); // Contains userId
+
+  if (!code) {
+    return c.json({ error: 'No code provided' }, 400);
+  }
+
+  // Get user from session or state
+  const user = await getCurrentUser(c);
+  const userId = user?.id || state;
+
+  if (!userId) {
+    return c.json({ error: 'No user session' }, 401);
+  }
+
+  try {
+    const { teamName } = await handleSlackCallback(code, userId);
+    return c.html(`
+      <html><body>
+        <h1>Slack Connected!</h1>
+        <p>Successfully connected to workspace: ${teamName}</p>
+        <p><a href="/dashboard">Back to Dashboard</a></p>
+      </body></html>
+    `);
+  } catch (error) {
+    return c.json({ error: String(error) }, 500);
+  }
 });
 
 // Dashboard (requires auth)

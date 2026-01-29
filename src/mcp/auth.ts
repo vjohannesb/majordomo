@@ -1,7 +1,7 @@
 /**
  * Authentication Module
  *
- * Handles Google OAuth and session management.
+ * Handles Google OAuth, Slack OAuth, and session management.
  */
 
 import type { Context } from 'hono';
@@ -10,6 +10,8 @@ import { findOrCreateUser, getUserById, saveOAuthToken, type User } from './db.j
 
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID!;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET!;
+const SLACK_CLIENT_ID = process.env.SLACK_CLIENT_ID;
+const SLACK_CLIENT_SECRET = process.env.SLACK_CLIENT_SECRET;
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
 
 const SCOPES = [
@@ -183,4 +185,102 @@ export function validateApiKey(apiKey: string): string | null {
   } catch {
     return null;
   }
+}
+
+// ============================================================================
+// Slack OAuth
+// ============================================================================
+
+const SLACK_SCOPES = [
+  'channels:read',
+  'channels:history',
+  'chat:write',
+  'groups:read',
+  'groups:history',
+  'im:read',
+  'im:history',
+  'im:write',
+  'mpim:read',
+  'mpim:history',
+  'users:read',
+].join(',');
+
+/**
+ * Generate Slack OAuth URL
+ */
+export function getSlackAuthUrl(state?: string): string {
+  if (!SLACK_CLIENT_ID) {
+    throw new Error('SLACK_CLIENT_ID not configured');
+  }
+
+  const params = new URLSearchParams({
+    client_id: SLACK_CLIENT_ID,
+    redirect_uri: `${BASE_URL}/auth/slack/callback`,
+    scope: SLACK_SCOPES,
+    ...(state && { state }),
+  });
+
+  return `https://slack.com/oauth/v2/authorize?${params}`;
+}
+
+/**
+ * Exchange Slack authorization code for tokens
+ */
+export async function exchangeSlackCode(code: string): Promise<{
+  accessToken: string;
+  teamId: string;
+  teamName: string;
+  botUserId: string;
+}> {
+  if (!SLACK_CLIENT_ID || !SLACK_CLIENT_SECRET) {
+    throw new Error('Slack OAuth not configured');
+  }
+
+  const response = await fetch('https://slack.com/api/oauth.v2.access', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: SLACK_CLIENT_ID,
+      client_secret: SLACK_CLIENT_SECRET,
+      code,
+      redirect_uri: `${BASE_URL}/auth/slack/callback`,
+    }),
+  });
+
+  const data = await response.json();
+
+  if (!data.ok) {
+    throw new Error(`Slack OAuth error: ${data.error}`);
+  }
+
+  return {
+    accessToken: data.access_token,
+    teamId: data.team.id,
+    teamName: data.team.name,
+    botUserId: data.bot_user_id,
+  };
+}
+
+/**
+ * Handle Slack OAuth callback
+ */
+export async function handleSlackCallback(
+  code: string,
+  userId: string
+): Promise<{ teamName: string }> {
+  const tokens = await exchangeSlackCode(code);
+
+  // Save Slack OAuth tokens
+  await saveOAuthToken(userId, {
+    provider: 'slack',
+    accountName: tokens.teamName,
+    accessToken: tokens.accessToken,
+    tokenData: {
+      teamId: tokens.teamId,
+      teamName: tokens.teamName,
+      botUserId: tokens.botUserId,
+    },
+  });
+
+  return { teamName: tokens.teamName };
 }
