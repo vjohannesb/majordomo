@@ -197,6 +197,23 @@ export async function getOAuthTokens(
   }));
 }
 
+export async function deleteOAuthToken(
+  userId: string,
+  provider: string,
+  accountName: string
+): Promise<boolean> {
+  if (!sql) throw new Error('Database not configured');
+
+  const result = await sql`
+    DELETE FROM oauth_tokens
+    WHERE user_id = ${userId}
+      AND provider = ${provider}
+      AND account_name = ${accountName}
+  `;
+
+  return result.count > 0;
+}
+
 // ============================================================================
 // Memory Operations
 // ============================================================================

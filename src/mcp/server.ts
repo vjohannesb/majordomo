@@ -26,6 +26,8 @@ import {
   listMemories,
   deleteMemory,
   getOAuthTokens,
+  saveOAuthToken,
+  deleteOAuthToken,
   type Memory,
 } from './db.js';
 import {
@@ -37,6 +39,29 @@ import {
   generateApiKey,
   validateApiKey,
 } from './auth.js';
+import {
+  listEmails,
+  readEmail,
+  searchEmails,
+  sendEmail,
+  listCalendarEvents,
+  createCalendarEvent,
+} from './services/google.js';
+import {
+  listChannels as listSlackChannels,
+  sendMessage as sendSlackMessage,
+  readChannel as readSlackChannel,
+} from './services/slack.js';
+import {
+  listIssues as listLinearIssues,
+  createIssue as createLinearIssue,
+  updateIssue as updateLinearIssue,
+} from './services/linear.js';
+import {
+  renderDashboard,
+  renderApiKeySetup,
+  renderServiceManage,
+} from './dashboard.js';
 
 const PORT = parseInt(process.env.PORT || '3000');
 const isProduction = process.env.NODE_ENV === 'production';
@@ -183,6 +208,87 @@ const TOOLS = [
       required: ['title', 'start', 'end'],
     },
   },
+  // Slack tools
+  {
+    name: 'slack_list_channels',
+    description: 'List Slack channels in a workspace',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        account: { type: 'string', description: 'Workspace name (uses default if not specified)' },
+      },
+    },
+  },
+  {
+    name: 'slack_send_message',
+    description: 'Send a message to a Slack channel',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        channel: { type: 'string', description: 'Channel name (e.g., #general) or ID' },
+        text: { type: 'string', description: 'Message text' },
+        account: { type: 'string', description: 'Workspace name' },
+      },
+      required: ['channel', 'text'],
+    },
+  },
+  {
+    name: 'slack_read_channel',
+    description: 'Read recent messages from a Slack channel',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        channel: { type: 'string', description: 'Channel name or ID' },
+        limit: { type: 'number', description: 'Max messages (default 20)' },
+        account: { type: 'string', description: 'Workspace name' },
+      },
+      required: ['channel'],
+    },
+  },
+  // Linear tools
+  {
+    name: 'linear_list_issues',
+    description: 'List or search Linear issues',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: { type: 'string', description: 'Search query (optional)' },
+        limit: { type: 'number', description: 'Max issues (default 20)' },
+        account: { type: 'string', description: 'Workspace name' },
+      },
+    },
+  },
+  {
+    name: 'linear_create_issue',
+    description: 'Create a new Linear issue',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        title: { type: 'string', description: 'Issue title' },
+        description: { type: 'string', description: 'Issue description (markdown)' },
+        teamId: { type: 'string', description: 'Team ID (uses default team if not specified)' },
+        priority: { type: 'number', description: '0=None, 1=Urgent, 2=High, 3=Medium, 4=Low' },
+        account: { type: 'string', description: 'Workspace name' },
+      },
+      required: ['title'],
+    },
+  },
+  {
+    name: 'linear_update_issue',
+    description: 'Update a Linear issue',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        issueId: { type: 'string', description: 'Issue identifier (e.g., ENG-123)' },
+        title: { type: 'string', description: 'New title' },
+        description: { type: 'string', description: 'New description' },
+        stateId: { type: 'string', description: 'New state ID' },
+        priority: { type: 'number', description: 'New priority' },
+        account: { type: 'string', description: 'Workspace name' },
+      },
+      required: ['issueId'],
+    },
+  },
 ];
 
 // ============================================================================
@@ -256,21 +362,88 @@ async function executeTool(
       return deleted ? `Memory deleted.` : `Memory not found: ${id}`;
     }
 
-    // Email/Calendar tools would use the user's OAuth tokens
-    // For now, return a placeholder
-    case 'email_list':
-    case 'email_read':
-    case 'email_search':
-    case 'email_send':
-    case 'calendar_list':
+    // Email tools
+    case 'email_list': {
+      const { maxResults, account } = args as { maxResults?: number; account?: string };
+      return listEmails(userId, { maxResults, account });
+    }
+
+    case 'email_read': {
+      const { id, account } = args as { id: string; account?: string };
+      return readEmail(userId, id, account);
+    }
+
+    case 'email_search': {
+      const { query, limit, account } = args as { query: string; limit?: number; account?: string };
+      return searchEmails(userId, query, { limit, account });
+    }
+
+    case 'email_send': {
+      const { to, subject, body, account } = args as { to: string; subject: string; body: string; account?: string };
+      return sendEmail(userId, to, subject, body, account);
+    }
+
+    // Calendar tools
+    case 'calendar_list': {
+      const { days, limit, account } = args as { days?: number; limit?: number; account?: string };
+      return listCalendarEvents(userId, { days, limit, account });
+    }
+
     case 'calendar_create': {
-      // Get user's Google OAuth tokens
-      const tokens = await getOAuthTokens(userId, 'google');
-      if (tokens.length === 0) {
-        return 'No Google account connected. Please visit /auth/google to connect your account.';
-      }
-      // TODO: Implement actual email/calendar operations using tokens
-      return `Tool ${toolName} called with args: ${JSON.stringify(args)}. (Implementation pending)`;
+      const { title, start, end, description, location, account } = args as {
+        title: string;
+        start: string;
+        end: string;
+        description?: string;
+        location?: string;
+        account?: string;
+      };
+      return createCalendarEvent(userId, title, start, end, { description, location, account });
+    }
+
+    // Slack tools
+    case 'slack_list_channels': {
+      const { account } = args as { account?: string };
+      return listSlackChannels(userId, account);
+    }
+
+    case 'slack_send_message': {
+      const { channel, text, account } = args as { channel: string; text: string; account?: string };
+      return sendSlackMessage(userId, channel, text, account);
+    }
+
+    case 'slack_read_channel': {
+      const { channel, limit, account } = args as { channel: string; limit?: number; account?: string };
+      return readSlackChannel(userId, channel, { limit, account });
+    }
+
+    // Linear tools
+    case 'linear_list_issues': {
+      const { query, limit, account } = args as { query?: string; limit?: number; account?: string };
+      return listLinearIssues(userId, { query, limit, account });
+    }
+
+    case 'linear_create_issue': {
+      const { title, description, teamId, priority, account } = args as {
+        title: string;
+        description?: string;
+        teamId?: string;
+        priority?: number;
+        account?: string;
+      };
+      return createLinearIssue(userId, title, { description, teamId, priority, account });
+    }
+
+    case 'linear_update_issue': {
+      const { issueId, title, description, stateId, priority, account } = args as {
+        issueId: string;
+        title?: string;
+        description?: string;
+        stateId?: string;
+        priority?: number;
+        account?: string;
+      };
+      return updateLinearIssue(userId, issueId, { title, description, stateId, priority, account });
     }
 
     default:
@@ -329,32 +502,8 @@ app.get('/auth/callback', async (c) => {
   }
 
   try {
-    const user = await handleOAuthCallback(code, c);
-    const apiKey = generateApiKey(user.id);
-
-    // Return success page with API key
-    return c.html(`
-      <!DOCTYPE html>
-      <html>
-        <head>
-          <title>Majordomo - Connected!</title>
-          <style>
-            body { font-family: system-ui; max-width: 600px; margin: 50px auto; padding: 20px; }
-            code { background: #f4f4f4; padding: 10px; display: block; word-break: break-all; }
-            .success { color: green; }
-          </style>
-        </head>
-        <body>
-          <h1 class="success">Connected!</h1>
-          <p>Welcome, ${user.name || user.email}!</p>
-          <h3>Your MCP Endpoint:</h3>
-          <code>${process.env.BASE_URL || 'http://localhost:3000'}/mcp</code>
-          <h3>Your API Key:</h3>
-          <code>${apiKey}</code>
-          <p>Add this to your Claude settings to use Majordomo tools.</p>
-        </body>
-      </html>
-    `);
+    await handleOAuthCallback(code, c);
+    return c.redirect('/dashboard');
   } catch (error) {
     return c.json({ error: String(error) }, 500);
   }
@@ -371,51 +520,62 @@ app.get('/dashboard', async (c) => {
   if (!user) {
     return c.redirect('/auth/google');
   }
+  return c.html(await renderDashboard(user));
+});
 
-  const apiKey = generateApiKey(user.id);
+// Service management routes
+app.get('/services/:service/setup', async (c) => {
+  const user = await getCurrentUser(c);
+  if (!user) return c.redirect('/auth/google');
 
-  return c.html(`
-    <!DOCTYPE html>
-    <html>
-      <head>
-        <title>Majordomo Dashboard</title>
-        <style>
-          body { font-family: system-ui; max-width: 800px; margin: 50px auto; padding: 20px; }
-          code { background: #f4f4f4; padding: 10px; display: block; word-break: break-all; margin: 10px 0; }
-          .card { border: 1px solid #ddd; padding: 20px; margin: 20px 0; border-radius: 8px; }
-        </style>
-      </head>
-      <body>
-        <h1>Majordomo Dashboard</h1>
-        <p>Welcome, ${user.name || user.email}!</p>
+  const service = c.req.param('service');
+  return c.html(renderApiKeySetup(service));
+});
 
-        <div class="card">
-          <h3>MCP Configuration</h3>
-          <p>Add this to your Claude settings:</p>
-          <code>{
-  "mcpServers": {
-    "majordomo": {
-      "url": "${process.env.BASE_URL || 'http://localhost:3000'}/mcp/sse",
-      "headers": {
-        "Authorization": "Bearer ${apiKey}"
-      }
-    }
+app.post('/services/:service/setup', async (c) => {
+  const user = await getCurrentUser(c);
+  if (!user) return c.redirect('/auth/google');
+
+  const service = c.req.param('service');
+  const body = await c.req.parseBody();
+  const accountName = body['accountName'] as string;
+  const apiKey = body['apiKey'] as string;
+
+  if (!accountName || !apiKey) {
+    return c.json({ error: 'Missing account name or API key' }, 400);
   }
-}</code>
-        </div>
 
-        <div class="card">
-          <h3>Connected Services</h3>
-          <ul>
-            <li>Google (${user.email}) - Connected</li>
-          </ul>
-          <p><a href="/auth/google">Connect another Google account</a></p>
-        </div>
+  // Save the API key as an OAuth token
+  await saveOAuthToken(user.id, {
+    provider: service,
+    accountName,
+    accessToken: apiKey,
+  });
 
-        <p><a href="/auth/logout">Logout</a></p>
-      </body>
-    </html>
-  `);
+  return c.redirect('/dashboard');
+});
+
+app.get('/services/:service/manage', async (c) => {
+  const user = await getCurrentUser(c);
+  if (!user) return c.redirect('/auth/google');
+
+  const service = c.req.param('service');
+  return c.html(await renderServiceManage(user.id, service));
+});
+
+app.get('/services/:service/disconnect', async (c) => {
+  const user = await getCurrentUser(c);
+  if (!user) return c.redirect('/auth/google');
+
+  const service = c.req.param('service');
+  const accountName = c.req.query('account');
+
+  // Delete the token (need to add this function to db.ts)
+  if (accountName) {
+    await deleteOAuthToken(user.id, service, accountName);
+  }
+
+  return c.redirect('/dashboard');
 });
 
 // MCP SSE endpoint (for remote Claude clients)
