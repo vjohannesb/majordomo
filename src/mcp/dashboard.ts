@@ -348,7 +348,46 @@ export async function renderDashboard(user: User): Promise<string> {
     <section>
       <h2>MCP Configuration</h2>
       <div class="config-box">
-        <h3>Add to Claude Desktop / Claude Code</h3>
+        <h3>One-Click Install</h3>
+        <p style="font-size: 13px; color: #666; margin-bottom: 15px;">
+          Click to add Majordomo to your favorite editor:
+        </p>
+        <div style="display: flex; flex-wrap: wrap; gap: 10px;">
+          ${(() => {
+            const mcpConfig = {
+              url: `${BASE_URL}/mcp/sse`,
+              headers: { Authorization: `Bearer ${apiKey}` }
+            };
+            const cursorConfig = Buffer.from(JSON.stringify(mcpConfig)).toString('base64');
+            const cursorLink = `cursor://anysphere.cursor-deeplink/mcp/install?name=Majordomo&config=${cursorConfig}`;
+
+            const vscodeConfig = { name: 'majordomo', ...mcpConfig };
+            const vscodeLink = `vscode:mcp/install?${encodeURIComponent(JSON.stringify(vscodeConfig))}`;
+            const vscodeInsidersLink = `vscode-insiders:mcp/install?${encodeURIComponent(JSON.stringify(vscodeConfig))}`;
+
+            return `
+              <a href="${cursorLink}" class="install-btn" style="background: #000; color: #fff; padding: 10px 20px; border-radius: 8px; text-decoration: none; font-size: 14px; font-weight: 500; display: inline-flex; align-items: center; gap: 8px;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/></svg>
+                Add to Cursor
+              </a>
+              <a href="${vscodeLink}" class="install-btn" style="background: #007ACC; color: #fff; padding: 10px 20px; border-radius: 8px; text-decoration: none; font-size: 14px; font-weight: 500; display: inline-flex; align-items: center; gap: 8px;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.583 2.265L8.542 9.448 4.135 6.21l-1.468.813v9.953l1.468.813 4.407-3.238 9.041 7.183 3.75-1.851V4.116l-3.75-1.85zM6 15.57V8.43l3.417 3.57L6 15.57zm11.583 1.393l-6.25-4.963 6.25-4.963v9.926z"/></svg>
+                Add to VS Code
+              </a>
+              <a href="${vscodeInsidersLink}" class="install-btn" style="background: #24A97A; color: #fff; padding: 10px 20px; border-radius: 8px; text-decoration: none; font-size: 14px; font-weight: 500; display: inline-flex; align-items: center; gap: 8px;">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M17.583 2.265L8.542 9.448 4.135 6.21l-1.468.813v9.953l1.468.813 4.407-3.238 9.041 7.183 3.75-1.851V4.116l-3.75-1.85zM6 15.57V8.43l3.417 3.57L6 15.57zm11.583 1.393l-6.25-4.963 6.25-4.963v9.926z"/></svg>
+                VS Code Insiders
+              </a>
+            `;
+          })()}
+        </div>
+      </div>
+
+      <div class="config-box" style="margin-top: 15px;">
+        <h3>Manual Configuration</h3>
+        <p style="font-size: 13px; color: #666; margin-bottom: 10px;">
+          For Claude Desktop, Claude Code, or other MCP clients:
+        </p>
         <pre><code>{
   "mcpServers": {
     "majordomo": {
