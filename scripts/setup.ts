@@ -304,10 +304,21 @@ async function main() {
 
   const config = await loadExistingConfig();
 
-  // === SLACK SETUP ===
-  console.log('── SLACK SETUP ──\n');
+  // Check existing integrations
+  const slackConfig = config.slack as { userToken?: string; enabled?: boolean } | undefined;
+  const googleConfig = config.google as { refreshToken?: string } | undefined;
+  const hasSlack = slackConfig?.userToken || slackConfig?.enabled;
+  const hasGoogle = googleConfig?.refreshToken;
 
-  const setupSlack = await ask('Set up Slack integration? (y/n): ');
+  // === SLACK SETUP ===
+  console.log('── SLACK SETUP ──');
+  if (hasSlack) {
+    console.log('\x1b[32m✓ Already configured\x1b[0m\n');
+  } else {
+    console.log('\x1b[33m○ Not configured\x1b[0m\n');
+  }
+
+  const setupSlack = await ask(`${hasSlack ? 'Re-configure' : 'Set up'} Slack integration? (y/n): `);
 
   if (setupSlack.toLowerCase() === 'y') {
     // Get App Token first
@@ -358,9 +369,14 @@ Scroll to "App-Level Tokens" → Generate Token
   }
 
   // === GOOGLE SETUP (Gmail + Calendar) ===
-  console.log('\n── GOOGLE SETUP (Gmail + Calendar) ──\n');
+  console.log('\n── GOOGLE SETUP (Gmail + Calendar) ──');
+  if (hasGoogle) {
+    console.log('\x1b[32m✓ Already configured\x1b[0m\n');
+  } else {
+    console.log('\x1b[33m○ Not configured\x1b[0m\n');
+  }
 
-  const setupGoogle = await ask('Set up Gmail and Google Calendar? (y/n): ');
+  const setupGoogle = await ask(`${hasGoogle ? 'Re-configure' : 'Set up'} Gmail and Google Calendar? (y/n): `);
 
   if (setupGoogle.toLowerCase() === 'y') {
     console.log(`
