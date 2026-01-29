@@ -85,6 +85,18 @@ export interface AccountsConfig {
   jira?: JiraAccount[];
 }
 
+// Provider configuration
+export type ProviderType = 'anthropic' | 'openai' | 'ollama' | 'claude-code';
+export type AuthMode = 'api_key' | 'oauth' | 'cli';
+
+export interface ProviderSettings {
+  provider: ProviderType;
+  authMode: AuthMode;
+  model?: string;
+  apiKey?: string;
+  baseUrl?: string;
+}
+
 // ============================================================================
 // Legacy Config Interfaces (for migration)
 // ============================================================================
@@ -121,6 +133,8 @@ export interface MajordomoConfig {
   systemPrompt: string;
   /** Tick interval in ms */
   tickInterval: number;
+  /** AI provider configuration */
+  provider?: ProviderSettings;
   /** Multi-account configuration */
   accounts?: AccountsConfig;
 
