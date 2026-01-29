@@ -7,11 +7,12 @@
  * Benefits:
  * - No separate API key needed if you have Claude Max
  * - Uses your existing Claude Code setup
- * - Respects Claude Code's rate limits and billing
+ * - Claude has access to all its built-in tools (file system, web, etc.)
+ * - Plus access to Majordomo's external tools (Slack, Email, Calendar, etc.)
  */
 
 import { spawn } from 'node:child_process';
-import type { AIProvider, CompletionRequest, CompletionResponse, StreamEvent, ContentBlock, ToolDefinition } from './base.js';
+import type { AIProvider, CompletionRequest, CompletionResponse, StreamEvent, ContentBlock, ToolDefinition, Message } from './base.js';
 
 export class ClaudeCodeProvider implements AIProvider {
   readonly name = 'Claude Code';
@@ -26,17 +27,13 @@ export class ClaudeCodeProvider implements AIProvider {
   }
 
   async complete(request: CompletionRequest): Promise<CompletionResponse> {
-    // Build the message to send to Claude Code
-    const lastUserMessage = request.messages
-      .filter(m => m.role === 'user')
-      .map(m => typeof m.content === 'string' ? m.content :
-           m.content.filter(b => b.type === 'text').map(b => b.text).join(''))
-      .pop() || '';
+    // Build the full conversation as a prompt
+    const conversationText = this.buildConversationPrompt(request.messages);
 
-    // Build tool instructions if tools are provided
-    let prompt = lastUserMessage;
+    // Build the full prompt with tool instructions
+    let prompt = conversationText;
     if (request.tools && request.tools.length > 0) {
-      prompt = this.buildToolPrompt(request.tools, lastUserMessage);
+      prompt = this.buildToolPrompt(request.tools, conversationText);
     }
 
     const args = ['-p', '--output-format', 'json'];
@@ -133,19 +130,67 @@ export class ClaudeCodeProvider implements AIProvider {
     }
   }
 
-  private buildToolPrompt(tools: ToolDefinition[], userMessage: string): string {
+  private buildConversationPrompt(messages: Message[]): string {
+    // Convert messages to a readable conversation format
+    const parts: string[] = [];
+
+    for (const msg of messages) {
+      const role = msg.role === 'user' ? 'User' : 'Assistant';
+      let content: string;
+
+      if (typeof msg.content === 'string') {
+        content = msg.content;
+      } else {
+        // Handle content blocks (text, tool_result, etc.)
+        content = msg.content
+          .map(block => {
+            if (block.type === 'text' && block.text) {
+              return block.text;
+            } else if (block.type === 'tool_result' && block.content) {
+              return `[Tool Result: ${block.content}]`;
+            }
+            return '';
+          })
+          .filter(Boolean)
+          .join('\n');
+      }
+
+      if (content) {
+        parts.push(`${role}: ${content}`);
+      }
+    }
+
+    return parts.join('\n\n');
+  }
+
+  private buildToolPrompt(tools: ToolDefinition[], conversation: string): string {
     const toolDescriptions = tools.map(t =>
       `- ${t.name}: ${t.description}`
     ).join('\n');
 
-    return `You have access to the following tools. To use a tool, respond ONLY with JSON in this exact format:
+    return `## Conversation History
+${conversation}
+
+---
+
+## External Tools (Majordomo)
+
+You have access to external tools through Majordomo. These are SEPARATE from your built-in Claude Code tools.
+
+To use an external Majordomo tool, respond with ONLY this JSON format (nothing else):
 {"tool": "tool_name", "params": {...}}
 
-Available tools:
+Available external tools:
 ${toolDescriptions}
 
-User request: ${userMessage}
+## Instructions
 
-If you need to use a tool, respond with the JSON. If you can answer directly, just respond normally.`;
+1. You can use your built-in Claude Code tools freely (file system, web search, etc.)
+2. For Slack, Email, Calendar, Linear, Notion, Discord, Jira, iMessage - use the external tools above
+3. To call an external tool, just output the JSON. No approval needed. The tool will execute and you'll get the result.
+4. Read operations are safe - just call them directly
+5. For write operations (sending messages, creating issues), confirm with the user first
+
+Now respond to the user's latest message:`;
   }
 }
