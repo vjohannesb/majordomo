@@ -854,6 +854,115 @@ app.get('/services/:service/disconnect', async (c) => {
   return c.redirect('/dashboard');
 });
 
+// ============================================================================
+// Linear Webhooks
+// ============================================================================
+
+const LINEAR_WEBHOOK_SECRET = process.env.LINEAR_WEBHOOK_SECRET;
+
+function verifyLinearSignature(signature: string | undefined, rawBody: string): boolean {
+  if (!signature || !LINEAR_WEBHOOK_SECRET) return false;
+
+  const crypto = require('node:crypto');
+  const computedSignature = crypto
+    .createHmac('sha256', LINEAR_WEBHOOK_SECRET)
+    .update(rawBody)
+    .digest('hex');
+
+  return crypto.timingSafeEqual(
+    Buffer.from(signature, 'hex'),
+    Buffer.from(computedSignature, 'hex')
+  );
+}
+
+app.post('/webhooks/linear', async (c) => {
+  const rawBody = await c.req.text();
+  const signature = c.req.header('linear-signature');
+
+  // Verify signature
+  if (!verifyLinearSignature(signature, rawBody)) {
+    console.error('Linear webhook: Invalid signature');
+    return c.json({ error: 'Invalid signature' }, 401);
+  }
+
+  const payload = JSON.parse(rawBody);
+  const { action, type, data, actor, url, createdAt, webhookTimestamp, updatedFrom } = payload;
+
+  // Verify timestamp (within 60 seconds)
+  if (Math.abs(Date.now() - webhookTimestamp) > 60 * 1000) {
+    console.error('Linear webhook: Timestamp too old');
+    return c.json({ error: 'Timestamp too old' }, 401);
+  }
+
+  console.log(`Linear webhook: ${action} ${type}`, { id: data?.id, actor: actor?.name });
+
+  // Handle different event types
+  try {
+    switch (type) {
+      case 'Issue': {
+        const issueTitle = data.title;
+        const issueId = data.identifier || data.id;
+        const state = data.state?.name;
+        const assignee = data.assignee?.name;
+
+        if (action === 'create') {
+          console.log(`New issue created: ${issueId} - ${issueTitle}`);
+          // Could add memory: "New Linear issue created: {title}"
+        } else if (action === 'update') {
+          const changes = Object.keys(updatedFrom || {}).join(', ');
+          console.log(`Issue updated: ${issueId} - Changed: ${changes}`);
+
+          // If state changed to Done/Completed
+          if (updatedFrom?.stateId && state?.toLowerCase().includes('done')) {
+            console.log(`Issue completed: ${issueId} - ${issueTitle}`);
+          }
+        } else if (action === 'remove') {
+          console.log(`Issue removed: ${issueId}`);
+        }
+        break;
+      }
+
+      case 'Comment': {
+        const commentBody = data.body;
+        const issueId = data.issue?.identifier;
+
+        if (action === 'create') {
+          console.log(`New comment on ${issueId} by ${actor?.name}: ${commentBody?.slice(0, 100)}`);
+        }
+        break;
+      }
+
+      case 'Project': {
+        const projectName = data.name;
+
+        if (action === 'create') {
+          console.log(`New project created: ${projectName}`);
+        } else if (action === 'update') {
+          console.log(`Project updated: ${projectName}`);
+        }
+        break;
+      }
+
+      case 'Cycle': {
+        const cycleName = data.name || `Cycle ${data.number}`;
+
+        if (action === 'create') {
+          console.log(`New cycle created: ${cycleName}`);
+        }
+        break;
+      }
+
+      default:
+        console.log(`Unhandled webhook type: ${type}`);
+    }
+
+    return c.json({ success: true }, 200);
+  } catch (error) {
+    console.error('Linear webhook error:', error);
+    return c.json({ error: 'Internal error' }, 500);
+  }
+});
+
 // MCP SSE endpoint (for remote Claude clients)
 app.get('/mcp/sse', async (c) => {
   // Authenticate via API key
