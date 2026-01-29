@@ -6,6 +6,9 @@
  */
 
 import { EventEmitter } from 'node:events';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { homedir } from 'node:os';
 import { loadConfig } from '../config.js';
 import { AVAILABLE_TOOLS, executeTool, type ToolCall } from '../core/tools.js';
 import { createToolContext, type ToolContext } from '../core/accounts.js';
@@ -362,11 +365,8 @@ export class AgentRunner extends EventEmitter {
 // Synchronous config loader (for constructor)
 function loadConfigSync() {
   try {
-    const fs = require('node:fs');
-    const path = require('node:path');
-    const os = require('node:os');
-    const configPath = path.join(os.homedir(), '.majordomo', 'config.json');
-    const content = fs.readFileSync(configPath, 'utf-8');
+    const configPath = join(homedir(), '.majordomo', 'config.json');
+    const content = readFileSync(configPath, 'utf-8');
     return JSON.parse(content);
   } catch {
     return null;
