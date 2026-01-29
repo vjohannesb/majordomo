@@ -11,6 +11,7 @@ import { WebClient } from '@slack/web-api';
 import { Client as DiscordClient, ChannelType, TextChannel } from 'discord.js';
 import type { ToolContext } from './accounts.js';
 import { getMemoryStore, type Memory } from '../memory/index.js';
+import * as iMessage from '../integrations/imessage.js';
 
 // Debug mode
 const DEBUG = process.env.MAJORDOMO_DEBUG === '1' || process.env.DEBUG === '1';
@@ -353,6 +354,31 @@ export const AVAILABLE_TOOLS: Tool[] = [
       status: { type: 'string', description: 'Filter by status (e.g., "In Progress")' },
       limit: { type: 'number', description: 'Max results (default 10)' },
       account: { type: 'string', description: 'Account name (uses default if not specified)' },
+    },
+  },
+
+  // iMessage tools (macOS only)
+  {
+    name: 'imessage_send',
+    description: 'Send an iMessage. Only works on macOS with Messages app configured.',
+    parameters: {
+      recipient: { type: 'string', description: 'Phone number or email of the recipient', required: true },
+      message: { type: 'string', description: 'The message to send', required: true },
+    },
+  },
+  {
+    name: 'imessage_read',
+    description: 'Read recent iMessages. Only works on macOS.',
+    parameters: {
+      contact: { type: 'string', description: 'Filter by contact phone/email (optional)' },
+      limit: { type: 'number', description: 'Number of messages (default 10)' },
+    },
+  },
+  {
+    name: 'imessage_conversations',
+    description: 'List recent iMessage conversations. Only works on macOS.',
+    parameters: {
+      limit: { type: 'number', description: 'Number of conversations (default 10)' },
     },
   },
 ];
@@ -1635,6 +1661,65 @@ ${description.slice(0, 500)}${description.length > 500 ? '...' : ''}
         }).join('\n');
 
         return `Your issues (${result.total} total):\n${formatted}`;
+      }
+
+      // iMessage tools
+      case 'imessage_send': {
+        if (!iMessage.isIMessageAvailable()) {
+          return 'iMessage is not available. This feature only works on macOS with Messages app configured.';
+        }
+
+        const { recipient, message } = params as { recipient: string; message: string };
+        await iMessage.sendIMessage(recipient, message);
+        return `Sent iMessage to ${recipient}`;
+      }
+
+      case 'imessage_read': {
+        if (!iMessage.isIMessageAvailable()) {
+          return 'iMessage is not available. This feature only works on macOS with Messages app configured.';
+        }
+
+        const { contact, limit } = params as { contact?: string; limit?: number };
+
+        let messages;
+        if (contact) {
+          messages = await iMessage.readMessagesFrom(contact, limit || 10);
+        } else {
+          messages = await iMessage.readRecentMessages(limit || 10);
+        }
+
+        if (messages.length === 0) {
+          return contact ? `No messages found from/to ${contact}` : 'No recent messages found';
+        }
+
+        const formatted = messages.map(m => {
+          const direction = m.isFromMe ? 'You' : m.sender;
+          const time = m.date.toLocaleString();
+          return `[${time}] ${direction}: ${m.text.slice(0, 200)}${m.text.length > 200 ? '...' : ''}`;
+        }).join('\n');
+
+        return `Recent messages:\n${formatted}`;
+      }
+
+      case 'imessage_conversations': {
+        if (!iMessage.isIMessageAvailable()) {
+          return 'iMessage is not available. This feature only works on macOS with Messages app configured.';
+        }
+
+        const { limit } = params as { limit?: number };
+        const conversations = await iMessage.listConversations(limit || 10);
+
+        if (conversations.length === 0) {
+          return 'No conversations found';
+        }
+
+        const formatted = conversations.map(c => {
+          const name = c.displayName || c.chatId;
+          const lastMsg = c.lastMessage.toLocaleDateString();
+          return `- ${name} (last: ${lastMsg})`;
+        }).join('\n');
+
+        return `Recent conversations:\n${formatted}`;
       }
 
       default:
