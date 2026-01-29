@@ -14,6 +14,8 @@ const SLACK_CLIENT_ID = process.env.SLACK_CLIENT_ID;
 const SLACK_CLIENT_SECRET = process.env.SLACK_CLIENT_SECRET;
 const DISCORD_CLIENT_ID = process.env.DISCORD_CLIENT_ID;
 const DISCORD_CLIENT_SECRET = process.env.DISCORD_CLIENT_SECRET;
+const LINEAR_CLIENT_ID = process.env.LINEAR_CLIENT_ID;
+const LINEAR_CLIENT_SECRET = process.env.LINEAR_CLIENT_SECRET;
 const BASE_URL = process.env.BASE_URL || 'http://localhost:3000';
 
 const SCOPES = [
@@ -463,4 +465,144 @@ export async function handleDiscordCallback(
     username: user.username,
     guildName: tokens.guild?.name,
   };
+}
+
+// ============================================================================
+// Linear OAuth
+// ============================================================================
+
+const LINEAR_SCOPES = 'read,write,issues:create,comments:create';
+
+/**
+ * Generate Linear OAuth URL
+ */
+export function getLinearAuthUrl(state?: string): string {
+  if (!LINEAR_CLIENT_ID) {
+    throw new Error('LINEAR_CLIENT_ID not configured');
+  }
+
+  const params = new URLSearchParams({
+    client_id: LINEAR_CLIENT_ID,
+    redirect_uri: `${BASE_URL}/auth/linear/callback`,
+    response_type: 'code',
+    scope: LINEAR_SCOPES,
+    prompt: 'consent', // Allow connecting multiple workspaces
+    ...(state && { state }),
+  });
+
+  return `https://linear.app/oauth/authorize?${params}`;
+}
+
+/**
+ * Exchange Linear authorization code for tokens
+ */
+export async function exchangeLinearCode(code: string): Promise<{
+  accessToken: string;
+  refreshToken?: string;
+  expiresIn: number;
+  scope: string;
+}> {
+  if (!LINEAR_CLIENT_ID || !LINEAR_CLIENT_SECRET) {
+    throw new Error('Linear OAuth not configured');
+  }
+
+  const response = await fetch('https://api.linear.app/oauth/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: new URLSearchParams({
+      client_id: LINEAR_CLIENT_ID,
+      client_secret: LINEAR_CLIENT_SECRET,
+      grant_type: 'authorization_code',
+      code,
+      redirect_uri: `${BASE_URL}/auth/linear/callback`,
+    }),
+  });
+
+  const data = await response.json();
+
+  if (data.error) {
+    throw new Error(`Linear OAuth error: ${data.error_description || data.error}`);
+  }
+
+  return {
+    accessToken: data.access_token,
+    refreshToken: data.refresh_token,
+    expiresIn: data.expires_in,
+    scope: data.scope,
+  };
+}
+
+/**
+ * Get Linear user/organization info
+ */
+export async function getLinearViewer(accessToken: string): Promise<{
+  id: string;
+  name: string;
+  email: string;
+  organizationName: string;
+}> {
+  const response = await fetch('https://api.linear.app/graphql', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify({
+      query: `{
+        viewer {
+          id
+          name
+          email
+        }
+        organization {
+          name
+        }
+      }`,
+    }),
+  });
+
+  const data = await response.json();
+
+  if (data.errors) {
+    throw new Error(`Linear API error: ${data.errors[0]?.message}`);
+  }
+
+  return {
+    id: data.data.viewer.id,
+    name: data.data.viewer.name,
+    email: data.data.viewer.email,
+    organizationName: data.data.organization.name,
+  };
+}
+
+/**
+ * Handle Linear OAuth callback
+ */
+export async function handleLinearCallback(
+  code: string,
+  odmoUserId: string
+): Promise<{ organizationName: string }> {
+  const tokens = await exchangeLinearCode(code);
+  const viewer = await getLinearViewer(tokens.accessToken);
+
+  // Account name is the organization name
+  const accountName = viewer.organizationName;
+
+  // Save Linear OAuth tokens
+  await saveOAuthToken(odmoUserId, {
+    provider: 'linear',
+    accountName,
+    accessToken: tokens.accessToken,
+    refreshToken: tokens.refreshToken,
+    tokenData: {
+      linearUserId: viewer.id,
+      userName: viewer.name,
+      email: viewer.email,
+      organizationName: viewer.organizationName,
+      expiresIn: tokens.expiresIn,
+      scope: tokens.scope,
+    },
+  });
+
+  return { organizationName: viewer.organizationName };
 }

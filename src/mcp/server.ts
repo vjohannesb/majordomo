@@ -42,6 +42,8 @@ import {
   handleSlackCallback,
   getDiscordAuthUrl,
   handleDiscordCallback,
+  getLinearAuthUrl,
+  handleLinearCallback,
 } from './auth.js';
 import {
   listEmails,
@@ -822,6 +824,56 @@ app.get('/auth/discord/callback', async (c) => {
         <h1>Discord Connected!</h1>
         <p>Connected as: ${username}</p>
         ${guildMessage}
+        <p><a href="/dashboard">Back to Dashboard</a></p>
+      </body></html>
+    `);
+  } catch (error) {
+    return c.json({ error: String(error) }, 500);
+  }
+});
+
+// Linear OAuth
+app.get('/auth/linear', async (c) => {
+  const user = await getCurrentUser(c);
+  if (!user) {
+    return c.redirect('/auth/google');
+  }
+
+  try {
+    const url = getLinearAuthUrl(user.id);
+    return c.redirect(url);
+  } catch (error) {
+    return c.html(`
+      <html><body>
+        <h1>Linear OAuth Not Configured</h1>
+        <p>Set LINEAR_CLIENT_ID and LINEAR_CLIENT_SECRET environment variables.</p>
+        <p><a href="/dashboard">Back to Dashboard</a></p>
+      </body></html>
+    `);
+  }
+});
+
+app.get('/auth/linear/callback', async (c) => {
+  const code = c.req.query('code');
+  const state = c.req.query('state');
+
+  if (!code) {
+    return c.json({ error: 'No code provided' }, 400);
+  }
+
+  const user = await getCurrentUser(c);
+  const odmoUserId = user?.id || state;
+
+  if (!odmoUserId) {
+    return c.json({ error: 'No user session' }, 401);
+  }
+
+  try {
+    const { organizationName } = await handleLinearCallback(code, odmoUserId);
+    return c.html(`
+      <html><body>
+        <h1>Linear Connected!</h1>
+        <p>Connected to workspace: ${organizationName}</p>
         <p><a href="/dashboard">Back to Dashboard</a></p>
       </body></html>
     `);
