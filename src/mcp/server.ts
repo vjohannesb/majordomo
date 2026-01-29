@@ -72,10 +72,6 @@ import {
 } from './services/notion.js';
 import {
   listDiscordServers,
-  listDiscordChannels,
-  sendDiscordMessage,
-  readDiscordChannel,
-  sendDiscordDM,
 } from './services/discord.js';
 import {
   renderDashboard,
@@ -372,66 +368,15 @@ const TOOLS = [
       required: ['databaseId'],
     },
   },
-  // Discord tools
+  // Discord tools (read-only - Discord doesn't allow sending as user)
   {
     name: 'discord_list_servers',
-    description: 'List Discord servers the bot is in',
+    description: 'List Discord servers you are in',
     inputSchema: {
       type: 'object',
       properties: {
-        account: { type: 'string', description: 'Bot name' },
+        account: { type: 'string', description: 'Account name' },
       },
-    },
-  },
-  {
-    name: 'discord_list_channels',
-    description: 'List text channels in a Discord server',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        serverId: { type: 'string', description: 'Server ID' },
-        account: { type: 'string', description: 'Bot name' },
-      },
-      required: ['serverId'],
-    },
-  },
-  {
-    name: 'discord_send_message',
-    description: 'Send a message to a Discord channel',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        channelId: { type: 'string', description: 'Channel ID' },
-        content: { type: 'string', description: 'Message content' },
-        account: { type: 'string', description: 'Bot name' },
-      },
-      required: ['channelId', 'content'],
-    },
-  },
-  {
-    name: 'discord_read_channel',
-    description: 'Read recent messages from a Discord channel',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        channelId: { type: 'string', description: 'Channel ID' },
-        limit: { type: 'number', description: 'Max messages (default 20)' },
-        account: { type: 'string', description: 'Bot name' },
-      },
-      required: ['channelId'],
-    },
-  },
-  {
-    name: 'discord_send_dm',
-    description: 'Send a direct message to a Discord user',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        userId: { type: 'string', description: 'Discord user ID' },
-        content: { type: 'string', description: 'Message content' },
-        account: { type: 'string', description: 'Bot name' },
-      },
-      required: ['userId', 'content'],
     },
   },
 ];
@@ -622,30 +567,10 @@ async function executeTool(
       return queryNotionDatabase(userId, databaseId, { limit, account });
     }
 
-    // Discord tools
+    // Discord tools (read-only)
     case 'discord_list_servers': {
       const { account } = args as { account?: string };
       return listDiscordServers(userId, account);
-    }
-
-    case 'discord_list_channels': {
-      const { serverId, account } = args as { serverId: string; account?: string };
-      return listDiscordChannels(userId, serverId, account);
-    }
-
-    case 'discord_send_message': {
-      const { channelId, content, account } = args as { channelId: string; content: string; account?: string };
-      return sendDiscordMessage(userId, channelId, content, account);
-    }
-
-    case 'discord_read_channel': {
-      const { channelId, limit, account } = args as { channelId: string; limit?: number; account?: string };
-      return readDiscordChannel(userId, channelId, { limit, account });
-    }
-
-    case 'discord_send_dm': {
-      const { userId: discordUserId, content, account } = args as { userId: string; content: string; account?: string };
-      return sendDiscordDM(userId, discordUserId, content, account);
     }
 
     default:

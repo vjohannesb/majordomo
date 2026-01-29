@@ -306,20 +306,11 @@ export async function handleSlackCallback(
 // Discord OAuth
 // ============================================================================
 
-// Discord OAuth scopes
-// Note: For full messaging capabilities, you need a bot. User OAuth is limited.
-// - identify: get user info
-// - guilds: list user's servers
-// - guilds.members.read: get member info
-// - bot: add bot to server (enables messaging)
+// Discord OAuth scopes (read-only - Discord doesn't allow sending as user)
 const DISCORD_SCOPES = [
   'identify',
   'guilds',
-  'bot',
 ].join(' ');
-
-// Bot permissions: Send Messages, Read Message History, View Channels, Send DMs
-const DISCORD_BOT_PERMISSIONS = '3072';
 
 /**
  * Generate Discord OAuth URL
@@ -334,7 +325,6 @@ export function getDiscordAuthUrl(state?: string): string {
     redirect_uri: `${BASE_URL}/auth/discord/callback`,
     response_type: 'code',
     scope: DISCORD_SCOPES,
-    permissions: DISCORD_BOT_PERMISSIONS,
     ...(state && { state }),
   });
 
