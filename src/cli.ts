@@ -10,6 +10,7 @@
  *   majordomo "what's up today?"  - Quick query
  *   majordomo -c                  - Continue last conversation
  *   majordomo --setup             - Configure accounts
+ *   majordomo --serve             - Start HTTP gateway server
  */
 
 import { createInterface } from 'node:readline';
@@ -27,6 +28,9 @@ const args = process.argv.slice(2);
 const continueSession = args.includes('-c') || args.includes('--continue');
 const showHelp = args.includes('-h') || args.includes('--help');
 const runSetup = args.includes('--setup');
+const runServe = args.includes('--serve');
+const portArg = args.find((a) => a.startsWith('--port='));
+const port = portArg ? parseInt(portArg.split('=')[1] || '3000') : 3000;
 
 // Filter out flags to get the message
 const message = args.filter((a) => !a.startsWith('-')).join(' ');
@@ -48,12 +52,21 @@ ${BOLD}Usage:${RESET}
   majordomo -c                  Continue last conversation
   majordomo -c "message"        Continue with a new message
   majordomo --setup             Configure accounts
+  majordomo --serve             Start HTTP gateway server
+  majordomo --serve --port=8080 Start gateway on custom port
 
 ${BOLD}Examples:${RESET}
   majordomo "what's on my calendar today?"
   majordomo "check my slack messages"
   majordomo "send an email to bob@example.com"
   majordomo -c "what else did they say?"
+
+${BOLD}API Endpoints (when using --serve):${RESET}
+  POST /api/chat          Send a message (JSON: {message, sessionId?})
+  POST /api/chat/stream   Send with SSE streaming
+  GET  /api/sessions      List all sessions
+  GET  /api/sessions/:id  Get session details
+  GET  /health            Health check
 
 ${BOLD}Environment:${RESET}
   ANTHROPIC_API_KEY    Required. Your Anthropic API key.
@@ -178,6 +191,13 @@ async function main() {
     const { runSetup: doSetup } = await import('./setup/index.js');
     await doSetup();
     process.exit(0);
+  }
+
+  if (runServe) {
+    // Start HTTP gateway server
+    const { startGateway } = await import('./gateway/index.js');
+    await startGateway(port);
+    return; // Keep running
   }
 
   const sessionManager = new SessionManager();

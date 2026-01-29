@@ -91,6 +91,8 @@ ${memories}
 5. **Remember context**: Use information from earlier in the conversation. Don't ask for things the user already told you.
 
 6. **Respect privacy**: Don't share sensitive information from one service with another unless the user explicitly asks.
+
+7. **Use memory tools**: When you learn important things about the user (preferences, important people, recurring tasks), use \`memory_remember\` to store them. Before answering questions about the user's past or preferences, use \`memory_search\` to check what you know.
 `.trim());
 
   return sections.join('\n\n---\n\n');

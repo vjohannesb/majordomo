@@ -10,6 +10,7 @@
 import { WebClient } from '@slack/web-api';
 import { Client as DiscordClient, ChannelType, TextChannel } from 'discord.js';
 import type { ToolContext } from './accounts.js';
+import { getMemoryStore, type Memory } from '../memory/index.js';
 
 // Debug mode
 const DEBUG = process.env.MAJORDOMO_DEBUG === '1' || process.env.DEBUG === '1';
@@ -256,6 +257,40 @@ export const AVAILABLE_TOOLS: Tool[] = [
       properties: { type: 'string', description: 'JSON string of additional properties' },
       content: { type: 'string', description: 'Page content (Markdown)' },
       account: { type: 'string', description: 'Account name (uses default if not specified)' },
+    },
+  },
+
+  // Memory tools
+  {
+    name: 'memory_remember',
+    description: 'Store a fact, note, or task in long-term memory. Use this to remember important information about the user.',
+    parameters: {
+      type: { type: 'string', description: 'Type: fact, note, or task', required: true },
+      content: { type: 'string', description: 'What to remember', required: true },
+      tags: { type: 'string', description: 'Comma-separated tags for categorization' },
+    },
+  },
+  {
+    name: 'memory_search',
+    description: 'Search long-term memory for relevant information. Use before answering questions about past conversations or user preferences.',
+    parameters: {
+      query: { type: 'string', description: 'Search query', required: true },
+      type: { type: 'string', description: 'Filter by type: fact, note, task, or conversation' },
+      limit: { type: 'number', description: 'Max results (default 5)' },
+    },
+  },
+  {
+    name: 'memory_list',
+    description: 'List all memories of a given type',
+    parameters: {
+      type: { type: 'string', description: 'Type: fact, note, task, or conversation', required: true },
+    },
+  },
+  {
+    name: 'memory_forget',
+    description: 'Delete a memory by ID',
+    parameters: {
+      id: { type: 'string', description: 'Memory ID to delete', required: true },
     },
   },
 ];
@@ -1224,6 +1259,88 @@ export async function executeTool(call: ToolCall, ctx: ToolContext): Promise<str
         });
 
         return `Created page: ${title} (${page.id})`;
+      }
+
+      // Memory tools
+      case 'memory_remember': {
+        const { type, content, tags: tagsStr } = params as {
+          type: string;
+          content: string;
+          tags?: string;
+        };
+
+        const validTypes = ['fact', 'note', 'task', 'conversation'];
+        if (!validTypes.includes(type)) {
+          return `Invalid type: ${type}. Must be one of: ${validTypes.join(', ')}`;
+        }
+
+        const tags = tagsStr ? tagsStr.split(',').map(t => t.trim()).filter(Boolean) : [];
+        const memory = getMemoryStore().add(type as Memory['type'], content, tags);
+
+        return `Remembered (${type}): "${content.slice(0, 100)}${content.length > 100 ? '...' : ''}" [ID: ${memory.id.slice(0, 8)}]`;
+      }
+
+      case 'memory_search': {
+        const { query, type, limit } = params as {
+          query: string;
+          type?: string;
+          limit?: number;
+        };
+
+        const results = getMemoryStore().search(query, {
+          type: type as Memory['type'] | undefined,
+          limit: limit || 5,
+        });
+
+        if (results.length === 0) {
+          return `No memories found for: "${query}"`;
+        }
+
+        const formatted = results.map((r, i) => {
+          const m = r.memory;
+          const tags = m.tags.length > 0 ? ` [${m.tags.join(', ')}]` : '';
+          return `${i + 1}. [${m.type}] ${m.content.slice(0, 200)}${m.content.length > 200 ? '...' : ''}${tags}`;
+        }).join('\n');
+
+        return `Found ${results.length} memories:\n${formatted}`;
+      }
+
+      case 'memory_list': {
+        const { type } = params as { type: string };
+
+        const validTypes = ['fact', 'note', 'task', 'conversation'];
+        if (!validTypes.includes(type)) {
+          return `Invalid type: ${type}. Must be one of: ${validTypes.join(', ')}`;
+        }
+
+        const memories = getMemoryStore().listByType(type as Memory['type']);
+
+        if (memories.length === 0) {
+          return `No ${type}s stored.`;
+        }
+
+        const formatted = memories.map((m, i) => {
+          const tags = m.tags.length > 0 ? ` [${m.tags.join(', ')}]` : '';
+          return `${i + 1}. ${m.content.slice(0, 150)}${m.content.length > 150 ? '...' : ''}${tags} (ID: ${m.id.slice(0, 8)})`;
+        }).join('\n');
+
+        return `${type.charAt(0).toUpperCase() + type.slice(1)}s (${memories.length}):\n${formatted}`;
+      }
+
+      case 'memory_forget': {
+        const { id } = params as { id: string };
+
+        // Support partial ID matching
+        const store = getMemoryStore();
+        const allMemories = store.getAll();
+        const match = allMemories.find(m => m.id.startsWith(id));
+
+        if (!match) {
+          return `Memory not found: ${id}`;
+        }
+
+        store.delete(match.id);
+        return `Deleted memory: ${match.content.slice(0, 50)}...`;
       }
 
       default:
