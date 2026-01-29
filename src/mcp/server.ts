@@ -78,6 +78,7 @@ import {
   renderDashboard,
   renderApiKeySetup,
   renderServiceManage,
+  renderCallbackPage,
 } from './dashboard.js';
 import {
   sendNotification,
@@ -648,43 +649,55 @@ app.get('/auth/slack', async (c) => {
     const url = getSlackAuthUrl(user.id);
     return c.redirect(url);
   } catch (error) {
-    return c.html(`
-      <html><body>
-        <h1>Slack OAuth Not Configured</h1>
-        <p>Set SLACK_CLIENT_ID and SLACK_CLIENT_SECRET environment variables.</p>
-        <p><a href="/dashboard">Back to Dashboard</a></p>
-      </body></html>
-    `);
+    return c.html(renderCallbackPage({
+      type: 'error',
+      title: 'Slack Not Configured',
+      message: 'Set SLACK_CLIENT_ID and SLACK_CLIENT_SECRET environment variables.',
+      service: 'slack',
+    }));
   }
 });
 
 app.get('/auth/slack/callback', async (c) => {
   const code = c.req.query('code');
-  const state = c.req.query('state'); // Contains userId
+  const state = c.req.query('state');
 
   if (!code) {
-    return c.json({ error: 'No code provided' }, 400);
+    return c.html(renderCallbackPage({
+      type: 'error',
+      title: 'Connection Failed',
+      message: 'No authorization code received from Slack.',
+      service: 'slack',
+    }));
   }
 
-  // Get user from session or state
   const user = await getCurrentUser(c);
   const userId = user?.id || state;
 
   if (!userId) {
-    return c.json({ error: 'No user session' }, 401);
+    return c.html(renderCallbackPage({
+      type: 'error',
+      title: 'Session Expired',
+      message: 'Please log in again and try connecting Slack.',
+      service: 'slack',
+    }));
   }
 
   try {
     const { teamName } = await handleSlackCallback(code, userId);
-    return c.html(`
-      <html><body>
-        <h1>Slack Connected!</h1>
-        <p>Successfully connected to workspace: ${teamName}</p>
-        <p><a href="/dashboard">Back to Dashboard</a></p>
-      </body></html>
-    `);
+    return c.html(renderCallbackPage({
+      type: 'success',
+      title: 'Slack Connected!',
+      message: `Successfully connected to workspace: ${teamName}`,
+      service: 'slack',
+    }));
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return c.html(renderCallbackPage({
+      type: 'error',
+      title: 'Connection Failed',
+      message: String(error),
+      service: 'slack',
+    }));
   }
 });
 
@@ -699,13 +712,12 @@ app.get('/auth/linear', async (c) => {
     const url = getLinearAuthUrl(user.id);
     return c.redirect(url);
   } catch (error) {
-    return c.html(`
-      <html><body>
-        <h1>Linear OAuth Not Configured</h1>
-        <p>Set LINEAR_CLIENT_ID and LINEAR_CLIENT_SECRET environment variables.</p>
-        <p><a href="/dashboard">Back to Dashboard</a></p>
-      </body></html>
-    `);
+    return c.html(renderCallbackPage({
+      type: 'error',
+      title: 'Linear Not Configured',
+      message: 'Set LINEAR_CLIENT_ID and LINEAR_CLIENT_SECRET environment variables.',
+      service: 'linear',
+    }));
   }
 });
 
@@ -714,27 +726,41 @@ app.get('/auth/linear/callback', async (c) => {
   const state = c.req.query('state');
 
   if (!code) {
-    return c.json({ error: 'No code provided' }, 400);
+    return c.html(renderCallbackPage({
+      type: 'error',
+      title: 'Connection Failed',
+      message: 'No authorization code received from Linear.',
+      service: 'linear',
+    }));
   }
 
   const user = await getCurrentUser(c);
-  const odmoUserId = user?.id || state;
+  const userId = user?.id || state;
 
-  if (!odmoUserId) {
-    return c.json({ error: 'No user session' }, 401);
+  if (!userId) {
+    return c.html(renderCallbackPage({
+      type: 'error',
+      title: 'Session Expired',
+      message: 'Please log in again and try connecting Linear.',
+      service: 'linear',
+    }));
   }
 
   try {
-    const { organizationName } = await handleLinearCallback(code, odmoUserId);
-    return c.html(`
-      <html><body>
-        <h1>Linear Connected!</h1>
-        <p>Connected to workspace: ${organizationName}</p>
-        <p><a href="/dashboard">Back to Dashboard</a></p>
-      </body></html>
-    `);
+    const { organizationName } = await handleLinearCallback(code, userId);
+    return c.html(renderCallbackPage({
+      type: 'success',
+      title: 'Linear Connected!',
+      message: `Successfully connected to workspace: ${organizationName}`,
+      service: 'linear',
+    }));
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return c.html(renderCallbackPage({
+      type: 'error',
+      title: 'Connection Failed',
+      message: String(error),
+      service: 'linear',
+    }));
   }
 });
 
@@ -749,53 +775,68 @@ app.get('/auth/notion', async (c) => {
     const url = getNotionAuthUrl(user.id);
     return c.redirect(url);
   } catch (error) {
-    return c.html(`
-      <html><body>
-        <h1>Notion OAuth Not Configured</h1>
-        <p>Set NOTION_CLIENT_ID and NOTION_CLIENT_SECRET environment variables.</p>
-        <p><a href="/dashboard">Back to Dashboard</a></p>
-      </body></html>
-    `);
+    return c.html(renderCallbackPage({
+      type: 'error',
+      title: 'Notion Not Configured',
+      message: 'Set NOTION_CLIENT_ID and NOTION_CLIENT_SECRET environment variables.',
+      service: 'notion',
+    }));
   }
 });
 
 app.get('/auth/notion/callback', async (c) => {
   const code = c.req.query('code');
-  const state = c.req.query('state');
+  const rawState = c.req.query('state');
   const error = c.req.query('error');
 
+  // Strip 'u:' prefix from state (added to ensure Notion treats it as string)
+  const state = rawState?.startsWith('u:') ? rawState.slice(2) : rawState;
+
   if (error) {
-    return c.html(`
-      <html><body>
-        <h1>Notion OAuth Error</h1>
-        <p>${error}</p>
-        <p><a href="/dashboard">Back to Dashboard</a></p>
-      </body></html>
-    `);
+    return c.html(renderCallbackPage({
+      type: 'error',
+      title: 'Notion Error',
+      message: error,
+      service: 'notion',
+    }));
   }
 
   if (!code) {
-    return c.json({ error: 'No code provided' }, 400);
+    return c.html(renderCallbackPage({
+      type: 'error',
+      title: 'Connection Failed',
+      message: 'No authorization code received from Notion.',
+      service: 'notion',
+    }));
   }
 
   const user = await getCurrentUser(c);
   const userId = user?.id || state;
 
   if (!userId) {
-    return c.json({ error: 'No user session' }, 401);
+    return c.html(renderCallbackPage({
+      type: 'error',
+      title: 'Session Expired',
+      message: 'Please log in again and try connecting Notion.',
+      service: 'notion',
+    }));
   }
 
   try {
     const { workspaceName } = await handleNotionCallback(code, userId);
-    return c.html(`
-      <html><body>
-        <h1>Notion Connected!</h1>
-        <p>Connected to workspace: ${workspaceName}</p>
-        <p><a href="/dashboard">Back to Dashboard</a></p>
-      </body></html>
-    `);
+    return c.html(renderCallbackPage({
+      type: 'success',
+      title: 'Notion Connected!',
+      message: `Successfully connected to workspace: ${workspaceName}`,
+      service: 'notion',
+    }));
   } catch (error) {
-    return c.json({ error: String(error) }, 500);
+    return c.html(renderCallbackPage({
+      type: 'error',
+      title: 'Connection Failed',
+      message: String(error),
+      service: 'notion',
+    }));
   }
 });
 

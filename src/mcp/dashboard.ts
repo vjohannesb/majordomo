@@ -568,3 +568,160 @@ export async function renderServiceManage(userId: string, service: string): Prom
 </html>
   `;
 }
+
+/**
+ * Render a callback result page (success or error)
+ */
+export function renderCallbackPage(options: {
+  type: 'success' | 'error';
+  title: string;
+  message: string;
+  service?: string;
+  redirectUrl?: string;
+  redirectDelay?: number;
+}): string {
+  const {
+    type,
+    title,
+    message,
+    service,
+    redirectUrl = '/dashboard',
+    redirectDelay = 3,
+  } = options;
+
+  const icons: Record<string, string> = {
+    google: '📧',
+    slack: '💬',
+    linear: '📋',
+    notion: '📝',
+  };
+
+  const icon = type === 'success'
+    ? (service ? icons[service] || '✓' : '✓')
+    : '⚠️';
+
+  const bgColor = type === 'success' ? '#22c55e' : '#ef4444';
+  const bgColorLight = type === 'success' ? '#dcfce7' : '#fee2e2';
+
+  return `
+<!DOCTYPE html>
+<html>
+<head>
+  <title>${title} - Majordomo</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="refresh" content="${redirectDelay};url=${redirectUrl}">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #f5f5f5 0%, #e5e5e5 100%);
+      min-height: 100vh;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 20px;
+    }
+    .card {
+      background: #fff;
+      border-radius: 20px;
+      padding: 50px 40px;
+      max-width: 420px;
+      width: 100%;
+      box-shadow: 0 10px 40px rgba(0,0,0,0.1);
+      text-align: center;
+      animation: slideUp 0.4s ease-out;
+    }
+    @keyframes slideUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    .icon {
+      width: 80px;
+      height: 80px;
+      border-radius: 50%;
+      background: ${bgColorLight};
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 0 auto 24px;
+      font-size: 36px;
+    }
+    .icon-inner {
+      width: 60px;
+      height: 60px;
+      border-radius: 50%;
+      background: ${bgColor};
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 28px;
+    }
+    h1 {
+      font-size: 24px;
+      font-weight: 600;
+      color: #111;
+      margin-bottom: 12px;
+    }
+    .message {
+      font-size: 16px;
+      color: #666;
+      line-height: 1.5;
+      margin-bottom: 32px;
+    }
+    .redirect-notice {
+      font-size: 13px;
+      color: #999;
+      margin-bottom: 16px;
+    }
+    .progress-bar {
+      width: 100%;
+      height: 4px;
+      background: #e5e7eb;
+      border-radius: 2px;
+      overflow: hidden;
+      margin-bottom: 24px;
+    }
+    .progress-fill {
+      height: 100%;
+      background: ${bgColor};
+      border-radius: 2px;
+      animation: progress ${redirectDelay}s linear forwards;
+    }
+    @keyframes progress {
+      from { width: 0%; }
+      to { width: 100%; }
+    }
+    .btn {
+      display: inline-block;
+      padding: 12px 24px;
+      background: #000;
+      color: #fff;
+      text-decoration: none;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 500;
+      transition: background 0.2s;
+    }
+    .btn:hover {
+      background: #333;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="icon">
+      <div class="icon-inner">${icon}</div>
+    </div>
+    <h1>${title}</h1>
+    <p class="message">${message}</p>
+    <p class="redirect-notice">Redirecting to dashboard in ${redirectDelay} seconds...</p>
+    <div class="progress-bar">
+      <div class="progress-fill"></div>
+    </div>
+    <a href="${redirectUrl}" class="btn">Go to Dashboard</a>
+  </div>
+</body>
+</html>
+  `;
+}

@@ -454,12 +454,16 @@ export function getNotionAuthUrl(state?: string): string {
     throw new Error('NOTION_CLIENT_ID not configured');
   }
 
+  // Notion requires state to be clearly a string, not a numeric-looking value
+  // Prefix with 'u:' to ensure it's treated as a string
+  const stateParam = state ? `u:${state}` : undefined;
+
   const params = new URLSearchParams({
     client_id: NOTION_CLIENT_ID,
     redirect_uri: `${BASE_URL}/auth/notion/callback`,
     response_type: 'code',
     owner: 'user',
-    ...(state && { state }),
+    ...(stateParam && { state: stateParam }),
   });
 
   return `https://api.notion.com/v1/oauth/authorize?${params}`;
