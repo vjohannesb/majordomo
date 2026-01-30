@@ -1,0 +1,9 @@
+node_modules
+.next
+.git
+*.log
+.DS_Store
+server/node_modules
+server/dist
+dashboard/node_modules
+dashboard/.next

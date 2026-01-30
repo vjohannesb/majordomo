@@ -3,49 +3,32 @@
   "version": "0.1.0",
   "description": "Personal AI life management system",
   "type": "module",
-  "main": "dist/cli.js",
-  "bin": {
-    "majordomo": "./bin/majordomo.js"
-  },
+  "private": true,
+  "workspaces": [
+    "server",
+    "dashboard"
+  ],
   "scripts": {
-    "setup": "bun run src/setup/index.ts",
-    "start": "bun run src/cli.ts",
-    "debug": "bun run src/cli.ts --debug",
-    "dev": "bun --watch src/cli.ts",
-    "build": "bun build src/cli.ts --outdir=dist --target=node",
-    "mcp": "bun run src/mcp/server.ts",
-    "mcp:dev": "bun --watch src/mcp/server.ts",
-    "mcp:stdio": "bun run src/mcp/server.ts --stdio"
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:dashboard\"",
+    "dev:server": "cd server && bun run dev",
+    "dev:dashboard": "cd dashboard && npm run dev",
+    "build": "npm run build:server && npm run build:dashboard",
+    "build:server": "cd server && bun build src/index.ts --outdir=dist --target=node",
+    "build:dashboard": "cd dashboard && npm run build",
+    "start:server": "cd server && bun run start",
+    "start:dashboard": "cd dashboard && npm run start",
+    "mcp:stdio": "cd server && bun run stdio"
   },
   "keywords": [
     "ai",
     "assistant",
     "automation",
     "claude",
-    "slack"
+    "mcp"
   ],
   "author": "",
   "license": "MIT",
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
-    "@types/bun": "^1.1.0",
-    "@types/node": "^25.1.0",
-    "tsx": "^4.21.0",
-    "typescript": "^5.9.3"
-  },
-  "dependencies": {
-    "@anthropic-ai/sdk": "^0.71.2",
-    "@clack/prompts": "^1.0.0",
-    "@linear/sdk": "^72.0.0",
-    "@modelcontextprotocol/sdk": "^1.25.3",
-    "@notionhq/client": "^5.8.0",
-    "@slack/web-api": "^7.13.0",
-    "better-sqlite3": "^12.6.2",
-    "discord.js": "^14.25.1",
-    "dotenv": "^17.2.3",
-    "googleapis": "^170.1.0",
-    "hono": "^4.11.7",
-    "jira-client": "^8.2.2",
-    "postgres": "^3.4.8"
+    "concurrently": "^9.1.2"
   }
 }

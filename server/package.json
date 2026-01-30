@@ -1,0 +1,26 @@
+{
+  "name": "majordomo-server",
+  "version": "0.1.0",
+  "description": "Majordomo MCP Server",
+  "type": "module",
+  "scripts": {
+    "dev": "bun --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "stdio": "bun run src/index.ts --stdio"
+  },
+  "dependencies": {
+    "@linear/sdk": "^72.0.0",
+    "@modelcontextprotocol/sdk": "^1.25.3",
+    "@notionhq/client": "^5.8.0",
+    "@slack/web-api": "^7.13.0",
+    "dotenv": "^17.2.3",
+    "googleapis": "^170.1.0",
+    "hono": "^4.11.7",
+    "postgres": "^3.4.8"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.1.0",
+    "@types/node": "^25.1.0",
+    "typescript": "^5.9.3"
+  }
+}

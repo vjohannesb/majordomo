@@ -1,0 +1,20 @@
+# Dependencies
+node_modules/
+
+# Build
+dist/
+
+# Environment
+.env
+
+# Debug
+npm-debug.log*
+
+# IDE
+.idea/
+*.swp
+*.swo
+.vscode/
+
+# Misc
+.DS_Store
